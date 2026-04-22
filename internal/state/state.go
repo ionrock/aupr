@@ -16,10 +16,12 @@ type Store interface {
 	// Cursor
 	LastSeen(ctx context.Context, repo string, prNumber int) (string, error)
 	RecordSeen(ctx context.Context, repo string, prNumber int, eventID string) error
+	AllCursors(ctx context.Context) ([]Cursor, error)
 
 	// Attempts (for audit + circuit breaker)
 	RecordAttempt(ctx context.Context, a Attempt) error
 	RecentAttempts(ctx context.Context, repo string, prNumber int, limit int) ([]Attempt, error)
+	AllRecentAttempts(ctx context.Context, limit int) ([]Attempt, error)
 
 	// Agent sessions (for resume)
 	SaveSession(ctx context.Context, s Session) error
@@ -30,6 +32,11 @@ type Store interface {
 	Skip(ctx context.Context, repo string, prNumber int, reason string) error
 	Unskip(ctx context.Context, repo string, prNumber int) error
 	ListSkipped(ctx context.Context) ([]Skip, error)
+
+	// Global pause flag (blocks act-loop; polling continues)
+	IsPaused(ctx context.Context) (bool, string, error)
+	Pause(ctx context.Context, reason string) error
+	Unpause(ctx context.Context) error
 
 	Close() error
 }
@@ -63,4 +70,12 @@ type Skip struct {
 	PRNumber int
 	Reason   string
 	AddedAt  time.Time
+}
+
+// Cursor is one entry in pr_cursor.
+type Cursor struct {
+	Repo        string
+	PRNumber    int
+	LastEventID string
+	UpdatedAt   time.Time
 }

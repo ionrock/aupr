@@ -117,11 +117,49 @@ aupr [--dry-run] [--verbose] [--config PATH] <command>
   test <repo> <pr>            one PR through the full pipeline
                               (dry-run by default; pass --dry-run=false
                               to actually push)
-  status                      skip list + recent activity
+  status [repo pr]            summary, or detail for one PR
+  pause [reason...]           suspend the act-loop (polling continues)
+  resume                      resume the act-loop
   skip <repo> <pr> [reason]   add to persistent skip list
   unskip <repo> <pr>          remove from skip list
+  logs [-f] [-n N] [--err]    tail launchd log files
   config show|path|init|edit
 ```
+
+### Pause / resume
+
+`aupr pause [reason]` writes a flag to the state DB. The daemon's *next
+tick* observes it (paused state is per-DB, not per-process), renders a
+`[paused] act-loop suspended` banner, and skips every AUTO-action — but
+continues polling, classifying, and displaying the decision table.
+`aupr resume` clears the flag. Safe to use at any time; no daemon
+restart needed.
+
+### Slack notifications
+
+```toml
+[notify]
+slack_enabled      = true
+slack_webhook_url  = "https://hooks.slack.com/services/T0.../B0.../abc"
+```
+
+Any incoming-webhook URL works (create one via Slack app settings). aupr
+routes `error`, `circuit-breaker`, `flagged`, and `acted` events; other
+kinds are suppressed to avoid notification fatigue. If `slack_enabled`
+is true but the URL is empty, aupr logs a warning and falls back to
+log-only.
+
+### macOS notifications
+
+```toml
+[notify]
+macos_notifications = true
+```
+
+Fires via `osascript -e 'display notification ...'` for `error`,
+`circuit-breaker`, and `flagged` events only. Successes are silent.
+Requires the invoking process (or launchd) to have Notification Center
+permissions on first use.
 
 ## Logs
 

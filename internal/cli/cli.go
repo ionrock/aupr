@@ -3,12 +3,17 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
+	"time"
 
 	"github.com/ionrock/aupr/internal/config"
 	"github.com/ionrock/aupr/internal/daemon"
@@ -165,8 +170,9 @@ func cmdTest() *cli.Command {
 
 func cmdStatus() *cli.Command {
 	return &cli.Command{
-		Name:  "status",
-		Usage: "show cursors, recent attempts, and skip list",
+		Name:      "status",
+		Usage:     "show daemon status, cursors, recent attempts, and skip list",
+		ArgsUsage: "[repo pr-number]",
 		Action: func(ctx context.Context, c *cli.Command) error {
 			_, st, closeState, err := loadConfigAndState(c)
 			if err != nil {
@@ -175,8 +181,59 @@ func cmdStatus() *cli.Command {
 			defer closeState()
 
 			out := c.Writer
-			fmt.Fprintln(out, "Skip list:")
+
+			// Detail mode: `aupr status owner/repo pr`
+			if c.Args().Len() == 2 {
+				return statusDetail(ctx, c, st, c.Args().Get(0), c.Args().Get(1))
+			}
+
+			// Summary mode.
+			paused, reason, _ := st.IsPaused(ctx)
+			if paused {
+				fmt.Fprintf(out, "Daemon state: PAUSED (%s)\n\n", reason)
+			} else {
+				fmt.Fprintln(out, "Daemon state: running")
+				fmt.Fprintln(out)
+			}
+
+			cursors, _ := st.AllCursors(ctx)
+			fmt.Fprintf(out, "Cursors (%d PR(s) tracked):\n", len(cursors))
+			if len(cursors) == 0 {
+				fmt.Fprintln(out, "  (none yet — aupr hasn't recorded any PRs)")
+			} else {
+				tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+				fmt.Fprintln(tw, "  REPO\tPR\tLAST EVENT\tUPDATED")
+				for _, cur := range cursors {
+					fmt.Fprintf(tw, "  %s\t#%d\t%s\t%s\n",
+						cur.Repo, cur.PRNumber, truncateStr(cur.LastEventID, 24),
+						cur.UpdatedAt.Format("2006-01-02 15:04"))
+				}
+				tw.Flush()
+			}
+			fmt.Fprintln(out)
+
+			attempts, _ := st.AllRecentAttempts(ctx, 10)
+			fmt.Fprintf(out, "Recent attempts (%d):\n", len(attempts))
+			if len(attempts) == 0 {
+				fmt.Fprintln(out, "  (none)")
+			} else {
+				tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+				fmt.Fprintln(tw, "  WHEN\tREPO\tPR\tOUTCOME\tAGENT\tSUMMARY")
+				for _, a := range attempts {
+					sum := a.Summary
+					if sum == "" && a.Error != "" {
+						sum = "err: " + a.Error
+					}
+					fmt.Fprintf(tw, "  %s\t%s\t#%d\t%s\t%s\t%s\n",
+						age(a.FinishedAt), a.Repo, a.PRNumber, a.Outcome, a.Agent,
+						truncateStr(sum, 70))
+				}
+				tw.Flush()
+			}
+			fmt.Fprintln(out)
+
 			skips, _ := st.ListSkipped(ctx)
+			fmt.Fprintf(out, "Skip list (%d):\n", len(skips))
 			if len(skips) == 0 {
 				fmt.Fprintln(out, "  (none)")
 			} else {
@@ -188,10 +245,54 @@ func cmdStatus() *cli.Command {
 				}
 				tw.Flush()
 			}
-
 			return nil
 		},
 	}
+}
+
+func statusDetail(ctx context.Context, c *cli.Command, st state.Store, repo, prStr string) error {
+	n, err := strconv.Atoi(prStr)
+	if err != nil {
+		return fmt.Errorf("invalid pr number: %v", err)
+	}
+	out := c.Writer
+	fmt.Fprintf(out, "%s#%d\n\n", repo, n)
+
+	cursor, _ := st.LastSeen(ctx, repo, n)
+	if cursor == "" {
+		fmt.Fprintln(out, "Cursor: (none — aupr hasn't acted yet)")
+	} else {
+		fmt.Fprintf(out, "Cursor: %s\n", cursor)
+	}
+
+	if ok, reason, _ := st.IsSkipped(ctx, repo, n); ok {
+		fmt.Fprintf(out, "Skip: yes (%s)\n", reason)
+	}
+	fmt.Fprintln(out)
+
+	atts, _ := st.RecentAttempts(ctx, repo, n, 20)
+	fmt.Fprintf(out, "Attempts (%d most recent):\n", len(atts))
+	if len(atts) == 0 {
+		fmt.Fprintln(out, "  (none)")
+		return nil
+	}
+	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "  FINISHED\tOUTCOME\tAGENT\tSHA\tSUMMARY/ERROR")
+	for _, a := range atts {
+		msg := a.Summary
+		if msg == "" && a.Error != "" {
+			msg = a.Error
+		}
+		sha := a.CommitSHA
+		if len(sha) > 8 {
+			sha = sha[:8]
+		}
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\n",
+			a.FinishedAt.Format("2006-01-02 15:04"),
+			a.Outcome, a.Agent, sha, truncateStr(msg, 80))
+	}
+	tw.Flush()
+	return nil
 }
 
 func cmdSkip() *cli.Command {
@@ -256,10 +357,24 @@ func cmdUnskip() *cli.Command {
 
 func cmdPause() *cli.Command {
 	return &cli.Command{
-		Name:  "pause",
-		Usage: "stop acting (keep polling)",
-		Action: func(_ context.Context, _ *cli.Command) error {
-			return fmt.Errorf("pause: not implemented (runtime pause control is M4)")
+		Name:      "pause",
+		Usage:     "stop acting (keep polling). Takes effect on the next tick.",
+		ArgsUsage: "[reason...]",
+		Action: func(ctx context.Context, c *cli.Command) error {
+			_, st, closeState, err := loadConfigAndState(c)
+			if err != nil {
+				return err
+			}
+			defer closeState()
+			reason := "manual"
+			if c.Args().Len() > 0 {
+				reason = strings.Join(c.Args().Slice(), " ")
+			}
+			if err := st.Pause(ctx, reason); err != nil {
+				return err
+			}
+			fmt.Fprintf(c.Writer, "paused: %s\n", reason)
+			return nil
 		},
 	}
 }
@@ -268,8 +383,17 @@ func cmdResume() *cli.Command {
 	return &cli.Command{
 		Name:  "resume",
 		Usage: "resume acting after pause",
-		Action: func(_ context.Context, _ *cli.Command) error {
-			return fmt.Errorf("resume: not implemented (runtime pause control is M4)")
+		Action: func(ctx context.Context, c *cli.Command) error {
+			_, st, closeState, err := loadConfigAndState(c)
+			if err != nil {
+				return err
+			}
+			defer closeState()
+			if err := st.Unpause(ctx); err != nil {
+				return err
+			}
+			fmt.Fprintln(c.Writer, "resumed")
+			return nil
 		},
 	}
 }
@@ -332,12 +456,76 @@ func cmdConfig() *cli.Command {
 func cmdLogs() *cli.Command {
 	return &cli.Command{
 		Name:  "logs",
-		Usage: "print (or tail) the daemon log",
+		Usage: "print or tail the launchd daemon log files",
 		Flags: []cli.Flag{
-			&cli.BoolFlag{Name: "follow", Aliases: []string{"f"}},
+			&cli.BoolFlag{Name: "follow", Aliases: []string{"f"}, Usage: "follow (tail -f)"},
+			&cli.IntFlag{Name: "lines", Aliases: []string{"n"}, Value: 200, Usage: "lines to print when not following"},
+			&cli.BoolFlag{Name: "err", Usage: "show stderr only (default: both streams interleaved)"},
 		},
-		Action: func(_ context.Context, _ *cli.Command) error {
-			return fmt.Errorf("logs: not implemented (use `tail -f ~/.local/state/aupr/aupr.log`)")
+		Action: func(ctx context.Context, c *cli.Command) error {
+			cfg, err := config.Load(c.String("config"))
+			if err != nil {
+				return err
+			}
+			// The daemon's log file lives at cfg.Daemon.LogPath. The launchd
+			// plist writes aupr.{out,err}.log next to it.
+			dir := directoryOf(cfg.Daemon.LogPath)
+			var paths []string
+			if !c.Bool("err") {
+				paths = append(paths, dir+"/aupr.out.log")
+			}
+			paths = append(paths, dir+"/aupr.err.log")
+
+			var existing []string
+			for _, p := range paths {
+				if _, err := os.Stat(p); err == nil {
+					existing = append(existing, p)
+				} else if !errors.Is(err, fs.ErrNotExist) {
+					return err
+				}
+			}
+			if len(existing) == 0 {
+				return fmt.Errorf("no aupr log files in %s (install launchd: scripts/install-launchd.sh)", dir)
+			}
+
+			args := []string{"-n", strconv.Itoa(c.Int("lines"))}
+			if c.Bool("follow") {
+				args = append(args, "-F")
+			}
+			args = append(args, existing...)
+			cmd := exec.CommandContext(ctx, "tail", args...)
+			cmd.Stdout = c.Writer
+			cmd.Stderr = c.ErrWriter
+			return cmd.Run()
 		},
 	}
+}
+
+func directoryOf(p string) string {
+	// filepath.Dir but tolerant of trailing slashes.
+	p = strings.TrimRight(p, "/")
+	if i := strings.LastIndex(p, "/"); i >= 0 {
+		return p[:i]
+	}
+	return "."
+}
+
+func truncateStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n-1] + "…"
+}
+
+func age(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
+	return fmt.Sprintf("%dd", int(d.Hours()/24))
 }

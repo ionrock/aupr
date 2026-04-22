@@ -67,9 +67,10 @@ max_feedback_age_days = 14
 
 [notify]
 slack_enabled        = false
-slack_channel        = ""
+slack_webhook_url    = ""          # https://hooks.slack.com/services/...
+slack_channel        = ""          # informational only; webhook URL determines routing
 macos_notifications  = false
-summary_cadence      = "daily"     # never | per_action | daily
+summary_cadence      = "daily"     # never | per_action | daily  (reserved for M5+)
 
 # Per-repo overrides, keyed by "owner/name".
 [repos."dagster-io/internal"]

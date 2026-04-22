@@ -67,7 +67,7 @@ func New(cfg *config.Config, logger *slog.Logger, st state.Store) *Scheduler {
 		logger:   logger,
 		runner:   runner,
 		state:    st,
-		notifier: &notify.Log{Logger: logger},
+		notifier: notify.FromConfig(cfg.Notify, logger, runner),
 		agents: &agent.Registry{
 			Runner:        runner,
 			Logger:        logger,
@@ -81,9 +81,14 @@ func (s *Scheduler) RunOnce(ctx context.Context, opts Options) error {
 	if opts.Output == nil {
 		opts.Output = os.Stdout
 	}
-	s.logger.Info("aupr tick: starting", "dry_run", opts.DryRun, "only_pr", opts.OnlyPR)
+	paused, pauseReason, _ := s.state.IsPaused(ctx)
+	s.logger.Info("aupr tick: starting",
+		"dry_run", opts.DryRun, "only_pr", opts.OnlyPR, "paused", paused)
 	if opts.DryRun {
 		fmt.Fprintln(opts.Output, "[dry-run] no mutations will be performed")
+	}
+	if paused {
+		fmt.Fprintf(opts.Output, "[paused] act-loop suspended (%s); polling continues\n", pauseReason)
 	}
 
 	// 1. Discovery.
@@ -184,13 +189,16 @@ func (s *Scheduler) RunOnce(ctx context.Context, opts Options) error {
 		}
 
 		// Action: only AUTO, only when we have a viable plan, and only
-		// when the user asked us to (via explicit opts.OnlyPR OR a
-		// daemon run). The one-shot interactive path is `aupr test`,
+		// when not paused. The one-shot interactive path is `aupr test`,
 		// which sets OnlyPR and uses dry-run by default; `aupr run` sets
 		// !DryRun to actually push.
 		if d.Action == policy.ActAuto && r.plan != nil && r.planErr == nil {
-			outcome := s.act(ctx, repoByNWO[pr.Repo], *pr, d, r.plan, wtMgr, opts)
-			r.actOutcome = outcome
+			if paused {
+				r.actOutcome = "paused"
+			} else {
+				outcome := s.act(ctx, repoByNWO[pr.Repo], *pr, d, r.plan, wtMgr, opts)
+				r.actOutcome = outcome
+			}
 		}
 
 		rows = append(rows, r)

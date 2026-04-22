@@ -8,17 +8,19 @@ import (
 
 // Memory is an in-process Store used in tests.
 type Memory struct {
-	mu       sync.Mutex
-	cursors  map[string]string
-	attempts []Attempt
-	sessions map[string]Session
-	skipped  map[string]Skip
+	mu          sync.Mutex
+	cursors     map[string]Cursor
+	attempts    []Attempt
+	sessions    map[string]Session
+	skipped     map[string]Skip
+	paused      bool
+	pauseReason string
 }
 
 // NewMemory returns an empty Memory store.
 func NewMemory() *Memory {
 	return &Memory{
-		cursors:  map[string]string{},
+		cursors:  map[string]Cursor{},
 		sessions: map[string]Session{},
 		skipped:  map[string]Skip{},
 	}
@@ -33,14 +35,61 @@ func sessionKey(repo string, n int, agent string) string {
 func (m *Memory) LastSeen(_ context.Context, repo string, prNumber int) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.cursors[prKey(repo, prNumber)], nil
+	return m.cursors[prKey(repo, prNumber)].LastEventID, nil
 }
 
 // RecordSeen implements Store.
 func (m *Memory) RecordSeen(_ context.Context, repo string, prNumber int, eventID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.cursors[prKey(repo, prNumber)] = eventID
+	m.cursors[prKey(repo, prNumber)] = Cursor{
+		Repo: repo, PRNumber: prNumber, LastEventID: eventID, UpdatedAt: time.Now(),
+	}
+	return nil
+}
+
+// AllCursors implements Store.
+func (m *Memory) AllCursors(_ context.Context) ([]Cursor, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Cursor, 0, len(m.cursors))
+	for _, c := range m.cursors {
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// AllRecentAttempts implements Store.
+func (m *Memory) AllRecentAttempts(_ context.Context, limit int) ([]Attempt, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []Attempt
+	for i := len(m.attempts) - 1; i >= 0 && len(out) < limit; i-- {
+		out = append(out, m.attempts[i])
+	}
+	return out, nil
+}
+
+// IsPaused implements Store.
+func (m *Memory) IsPaused(_ context.Context) (bool, string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.paused, m.pauseReason, nil
+}
+
+// Pause implements Store.
+func (m *Memory) Pause(_ context.Context, reason string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.paused, m.pauseReason = true, reason
+	return nil
+}
+
+// Unpause implements Store.
+func (m *Memory) Unpause(_ context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.paused, m.pauseReason = false, ""
 	return nil
 }
 

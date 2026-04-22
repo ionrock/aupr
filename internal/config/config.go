@@ -103,6 +103,7 @@ type PolicyConfig struct {
 type NotifyConfig struct {
 	SlackEnabled       bool   `toml:"slack_enabled"`
 	SlackChannel       string `toml:"slack_channel"`
+	SlackWebhookURL    string `toml:"slack_webhook_url"`
 	MacOSNotifications bool   `toml:"macos_notifications"`
 	SummaryCadence     string `toml:"summary_cadence"`
 }

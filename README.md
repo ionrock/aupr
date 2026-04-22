@@ -3,8 +3,10 @@
 PR feedback daemon — polls your open PRs on a cadence and spawns an AI
 coding session in an appropriate git worktree to address new human feedback.
 
-**Status:** M1 + M2 shipped (read-only scout with worktree planning).
-See [PLAN.md](./PLAN.md) for roadmap and [docs/](./docs/) for reference.
+**Status:** M1–M4 shipped. End-to-end pipeline behind `--dry-run` with
+pause/resume runtime control, Slack + macOS notifiers, expanded status,
+and pluggable agent backends. See [PLAN.md](./PLAN.md) for roadmap and
+[docs/operations.md](./docs/operations.md) for running the daemon.
 
 ## Scope
 
@@ -48,6 +50,6 @@ aupr [--dry-run] [--verbose] [--config PATH] <command>
   skip   <repo> <pr> [reason] persistently skip                     ✅
   unskip <repo> <pr>          remove from skip list                 ✅
   config show|path|init|edit                                        ✅
-  pause | resume              runtime control                       M5+
-  logs                        print / tail daemon log               M5+
+  pause [reason] | resume     runtime control                       ✅
+  logs [-f] [-n N] [--err]    tail launchd log files                ✅
 ```

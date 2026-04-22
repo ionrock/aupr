@@ -77,6 +77,12 @@ CREATE TABLE IF NOT EXISTS pr_skip (
     added_at INTEGER NOT NULL,
     PRIMARY KEY (repo, pr_number)
 );
+
+CREATE TABLE IF NOT EXISTS daemon_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 `
 
 func (s *SQLite) migrate() error {
@@ -111,6 +117,27 @@ func (s *SQLite) RecordSeen(ctx context.Context, repo string, prNumber int, even
 	return err
 }
 
+// AllCursors implements Store.
+func (s *SQLite) AllCursors(ctx context.Context) ([]Cursor, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT repo, pr_number, last_seen_event_id, updated_at FROM pr_cursor ORDER BY updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Cursor
+	for rows.Next() {
+		var c Cursor
+		var updated int64
+		if err := rows.Scan(&c.Repo, &c.PRNumber, &c.LastEventID, &updated); err != nil {
+			return nil, err
+		}
+		c.UpdatedAt = time.Unix(updated, 0)
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // RecordAttempt implements Store.
 func (s *SQLite) RecordAttempt(ctx context.Context, a Attempt) error {
 	_, err := s.db.ExecContext(ctx, `
@@ -131,6 +158,21 @@ func (s *SQLite) RecentAttempts(ctx context.Context, repo string, prNumber int, 
 	if err != nil {
 		return nil, err
 	}
+	return scanAttempts(rows)
+}
+
+// AllRecentAttempts implements Store.
+func (s *SQLite) AllRecentAttempts(ctx context.Context, limit int) ([]Attempt, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT repo, pr_number, event_id, started_at, finished_at, agent, outcome, summary, commit_sha, error
+		FROM attempts ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanAttempts(rows)
+}
+
+func scanAttempts(rows *sql.Rows) ([]Attempt, error) {
 	defer rows.Close()
 	var out []Attempt
 	for rows.Next() {
@@ -226,6 +268,38 @@ func (s *SQLite) ListSkipped(ctx context.Context) ([]Skip, error) {
 		out = append(out, s)
 	}
 	return out, rows.Err()
+}
+
+// IsPaused implements Store.
+func (s *SQLite) IsPaused(ctx context.Context) (bool, string, error) {
+	var reason string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT value FROM daemon_settings WHERE key='pause_reason'`).Scan(&reason)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, "", nil
+	}
+	if err != nil {
+		return false, "", err
+	}
+	return reason != "", reason, nil
+}
+
+// Pause implements Store.
+func (s *SQLite) Pause(ctx context.Context, reason string) error {
+	if reason == "" {
+		reason = "manual"
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO daemon_settings (key, value, updated_at) VALUES ('pause_reason', ?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+		reason, time.Now().Unix())
+	return err
+}
+
+// Unpause implements Store.
+func (s *SQLite) Unpause(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM daemon_settings WHERE key='pause_reason'`)
+	return err
 }
 
 // Close implements Store.

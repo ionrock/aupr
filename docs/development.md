@@ -116,5 +116,6 @@ There is no release automation yet. When we need one:
 | M0 | ✅ shipped | go mod, cobra→urfave CLI, config, Makefile |
 | M1 | ✅ shipped | discovery, feedback, policy, scheduler, `aupr once` |
 | M2 | ✅ shipped | `internal/worktree/` with plan/acquire/release, stash-protected checkout, pluggable create_command, scheduler shows WORKSPACE column |
-| M3 | planned | `internal/agent/`, state (sqlite), launchd, audit trail, crash-recovery stash scan |
-| M4 | planned | per-repo tuning, Slack digest, status CLI polish |
+| M3 | ✅ shipped | `internal/agent/` (claude-code + pluggable `command`), `internal/land/`, `internal/daemon/`, sqlite state, circuit breaker, launchd script |
+| M4 | ✅ shipped | status (summary + detail), pause/resume runtime control, skip/unskip, per-repo agent/agent_command/quality-gates overrides, session reuse, Slack + macOS notifiers, logs subcommand |
+| M5+ | planned | crash-recovery stash scan, codex + opencode agents, cost tracking, per-PR cadence, daily digest scheduling |
