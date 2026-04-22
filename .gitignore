@@ -1,8 +1,8 @@
-__pycache__/
-*.py[cod]
-.venv/
-.env
-*.log
 .DS_Store
+*.log
+/bin/
+/dist/
 /.local/
 /state.db
+/prbot
+coverage.out

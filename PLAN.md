@@ -1,6 +1,6 @@
 # PR Feedback Daemon — Plan
 
-**Project name (working):** `prbot` at `~/Projects/prbot/`
+**Project name (working):** `aupr` at `~/Projects/aupr/`
 **Status:** PLAN — awaiting Eric's review before any code is written.
 **Author:** CTO Assistant, 2026-04-22
 
@@ -74,7 +74,7 @@ Single Python daemon launched by `launchctl` (reusing the pattern in
 `~/Projects/assistant/scheduler/`). One process, async loop, no web server.
 
 ```
-prbot (launchd)
+aupr (launchd)
   └─ tick every N minutes
       ├─ refresh PR list from gh (--author @me, --state open)
       ├─ for each PR:
@@ -95,14 +95,14 @@ prbot (launchd)
 ### 4.2 Repo layout (proposed)
 
 ```
-~/Projects/prbot/
+~/Projects/aupr/
 ├── README.md
 ├── pyproject.toml           # uv-managed
-├── prbot/
+├── aupr/
 │   ├── __init__.py
-│   ├── cli.py               # `prbot run|once|status|pause|resume|config`
+│   ├── cli.py               # `aupr run|once|status|pause|resume|config`
 │   ├── daemon.py            # main async loop
-│   ├── config.py            # pydantic settings, ~/.config/prbot/config.toml
+│   ├── config.py            # pydantic settings, ~/.config/aupr/config.toml
 │   ├── discovery.py         # walk ~/Dagster/ and ~/Projects/, find git+gh remotes
 │   ├── feedback.py          # gh GraphQL → normalized "feedback events"
 │   ├── scheduler.py         # decide which PRs to act on + bounded concurrency
@@ -120,7 +120,7 @@ prbot (launchd)
 
 ### 4.3 State
 
-SQLite at `~/.local/state/prbot/state.db` with tables:
+SQLite at `~/.local/state/aupr/state.db` with tables:
 - `pr_cursor` — (repo, pr_number) → last_seen_comment_id, last_acted_at, last_commit_pushed
 - `attempts` — (pr_number, feedback_id, started_at, agent, outcome, notes)
 - `worktree_leases` — (worktree_path, pr_number, acquired_at, released_at)
@@ -193,7 +193,7 @@ If any step fails, daemon stops, leaves the worktree dirty, and notifies Eric.
 
 ## 5. Configuration
 
-Default config at `~/.config/prbot/config.toml`:
+Default config at `~/.config/aupr/config.toml`:
 
 ```toml
 [daemon]
@@ -201,7 +201,7 @@ tick_minutes = 15
 roots = ["~/Dagster", "~/Projects"]
 github_user = "ionrock"
 bounded_concurrency = 2
-log_path = "~/.local/state/prbot/prbot.log"
+log_path = "~/.local/state/aupr/aupr.log"
 
 [worktree]
 reuse_policy = "per_pr"       # per_pr | per_repo_pool | ephemeral
@@ -239,18 +239,18 @@ quality_gates = ["cask eval", "emacs -batch -l ert -l test/workset-test.el -f er
 ## 6. CLI UX
 
 ```
-prbot run                 # start daemon (fg)
-prbot once                # one tick, then exit (for cron / debugging)
-prbot status              # show active PRs, last-seen cursor, worktree leases
-prbot status <pr>         # detail for one PR
-prbot pause               # stop acting (daemon keeps running, just skips action)
-prbot resume
-prbot skip <pr>           # never act on this PR
-prbot unskip <pr>
-prbot config show
-prbot config edit
-prbot logs [--follow]
-prbot test <pr> --dry-run # preview what the daemon would do
+aupr run                 # start daemon (fg)
+aupr once                # one tick, then exit (for cron / debugging)
+aupr status              # show active PRs, last-seen cursor, worktree leases
+aupr status <pr>         # detail for one PR
+aupr pause               # stop acting (daemon keeps running, just skips action)
+aupr resume
+aupr skip <pr>           # never act on this PR
+aupr unskip <pr>
+aupr config show
+aupr config edit
+aupr logs [--follow]
+aupr test <pr> --dry-run # preview what the daemon would do
 ```
 
 ## 7. Safety (non-negotiable)
@@ -262,7 +262,7 @@ prbot test <pr> --dry-run # preview what the daemon would do
 - **Never act on a PR with approved review state unless new feedback is posted after approval.**
 - **Never act twice on the same feedback id.** State store prevents this.
 - **Always leave a visible audit trail.** Every action commits with a
-  descriptive message prefixed `prbot:` AND posts a reply in the comment
+  descriptive message prefixed `aupr:` AND posts a reply in the comment
   thread identifying itself as the daemon.
 - **Circuit breaker.** If 3 consecutive failures on the same PR, mark it
   `skip` automatically and notify Eric.
@@ -274,7 +274,7 @@ prbot test <pr> --dry-run # preview what the daemon would do
 - Structured JSON log per tick + per worker-action
 - Daily digest sent to Eric's self-DM on Slack: actions taken, flags for
   review, skipped items
-- `prbot status` renders a live table
+- `aupr status` renders a live table
 - Metrics rolled into `~/Projects/assistant/cost-pulse/` if we want cost
   tracking down the line (out of v1 scope)
 
@@ -283,7 +283,7 @@ prbot test <pr> --dry-run # preview what the daemon would do
 **M1 — Read-only scout (1 day)**
 - Discovery walks `~/Dagster/` + `~/Projects/`, resolves GH remotes
 - `gh` polling for Eric's open PRs with normalized feedback events
-- `prbot once` prints a decision table ("would act | would flag | would skip" per PR)
+- `aupr once` prints a decision table ("would act | would flag | would skip" per PR)
 - No mutations, no worktrees touched
 
 **M2 — Worktree + agent spawn, dry-run (1 day)**
@@ -302,7 +302,22 @@ prbot test <pr> --dry-run # preview what the daemon would do
 
 ## 10. Open questions for Eric
 
-1. **Name?** `prbot` is a placeholder. Alternatives: `prwatch`, `reviewbot`,
+0. **Go vs Python?** This plan now targets Go. Implications:
+   - **Pros:** single static binary (clean launchd story, no venv drift,
+     trivial `go install`); first-class concurrency primitives for the
+     worker pool; stdlib `log/slog` covers structured logging without deps;
+     fast startup matters for `aupr once` cron-style invocation; the
+     existing `wt` CLI is Go, so style/idioms line up.
+   - **Cons:** none of Eric's other daemons (`assistant/scheduler/`,
+     `autotriage`) are Go — loses code sharing if those are Python; GitHub
+     GraphQL ergonomics are better in Python; LLM/agent SDKs are
+     Python-first, though we mostly shell out to `claude`/`codex` anyway so
+     that's a wash; TOML+pydantic-style validation is nicer than koanf.
+   - **Net:** Go is a good fit because aupr is mostly process orchestration
+     (subprocess, sqlite, HTTP) and we want a reliable long-running daemon.
+     The one real loss is shared code with `autotriage` — revisit after
+     reading it (see §11).
+1. **Name?** `aupr` is a placeholder. Alternatives: `prwatch`, `reviewbot`,
    `autopilot`, `lander`, `plane` (since the workflow talks about "landing").
 2. **Cadence?** 15 min default feels right for PRs but might be noisy. Want
    different cadences per repo?
@@ -323,7 +338,7 @@ prbot test <pr> --dry-run # preview what the daemon would do
    conservative. Easy to loosen later; hard to claw back trust if we start
    too aggressive.
 9. **Does anything here conflict with how `workset.el` expects to own
-   worktrees?** If workset is the source of truth, prbot should be a client
+   worktrees?** If workset is the source of truth, aupr should be a client
    that asks workset for worktrees (e.g. via a small emacsclient call or a
    shared registry file).
 
@@ -331,7 +346,7 @@ prbot test <pr> --dry-run # preview what the daemon would do
 
 - Read `~/Projects/autotriage/` end-to-end
 - Read `~/Projects/workset/` to understand hook system + how it persists state
-- Check whether `wt` has a hook we can register so it notifies prbot when
+- Check whether `wt` has a hook we can register so it notifies aupr when
   humans change worktrees (avoid fighting humans for a dirty tree)
 - Scan Eric's open PRs for typical feedback shapes — calibrate policy heuristics
 

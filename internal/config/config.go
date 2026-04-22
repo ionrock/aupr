@@ -1,0 +1,279 @@
+// Package config loads and validates aupr's TOML configuration.
+//
+// Resolution order (first match wins for the path, then fields merge over
+// the baked-in defaults):
+//   1. --config flag
+//   2. $AUPR_CONFIG environment variable
+//   3. ~/.config/aupr/config.toml
+//   4. bundled defaults (used if no file exists)
+package config
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	"github.com/BurntSushi/toml"
+)
+
+// Config is the top-level daemon configuration.
+type Config struct {
+	Daemon   DaemonConfig              `toml:"daemon"`
+	Worktree WorktreeConfig            `toml:"worktree"`
+	Agent    AgentConfig               `toml:"agent"`
+	Policy   PolicyConfig              `toml:"policy"`
+	Notify   NotifyConfig              `toml:"notify"`
+	Repos    map[string]RepoOverride   `toml:"repos"`
+}
+
+// DaemonConfig drives the main loop.
+type DaemonConfig struct {
+	TickMinutes         int      `toml:"tick_minutes"`
+	Roots               []string `toml:"roots"`
+	GithubUser          string   `toml:"github_user"`
+	BoundedConcurrency  int      `toml:"bounded_concurrency"`
+	LogPath             string   `toml:"log_path"`
+	StatePath           string   `toml:"state_path"`
+}
+
+// WorktreeConfig controls how worktrees are acquired and reused.
+type WorktreeConfig struct {
+	ReusePolicy  string `toml:"reuse_policy"`
+	BasePath     string `toml:"base_path"`
+	BranchPrefix string `toml:"branch_prefix"`
+}
+
+// AgentConfig controls which coding agent is invoked and how its session is reused.
+type AgentConfig struct {
+	Default             string `toml:"default"`
+	SessionReusePolicy  string `toml:"session_reuse_policy"`
+	MaxTurnsPerFeedback int    `toml:"max_turns_per_feedback"`
+	DryRun              bool   `toml:"dry_run"`
+}
+
+// PolicyConfig defines what the daemon will and won't act on.
+type PolicyConfig struct {
+	AutoAddressTypes   []string `toml:"auto_address_types"`
+	FlagButDontAct     []string `toml:"flag_but_dont_act"`
+	Skip               []string `toml:"skip"`
+	MaxFeedbackAgeDays int      `toml:"max_feedback_age_days"`
+}
+
+// NotifyConfig controls notification sinks.
+type NotifyConfig struct {
+	SlackEnabled       bool   `toml:"slack_enabled"`
+	SlackChannel       string `toml:"slack_channel"`
+	MacOSNotifications bool   `toml:"macos_notifications"`
+	SummaryCadence     string `toml:"summary_cadence"`
+}
+
+// RepoOverride is per-repo config keyed by "owner/name".
+type RepoOverride struct {
+	Agent              string   `toml:"agent"`
+	BoundedConcurrency int      `toml:"bounded_concurrency"`
+	QualityGates       []string `toml:"quality_gates"`
+	Skip               bool     `toml:"skip"`
+}
+
+// Defaults returns the baked-in default config.
+func Defaults() *Config {
+	return &Config{
+		Daemon: DaemonConfig{
+			TickMinutes:        15,
+			Roots:              []string{"~/Dagster", "~/Projects"},
+			GithubUser:         "ionrock",
+			BoundedConcurrency: 2,
+			LogPath:            "~/.local/state/aupr/aupr.log",
+			StatePath:          "~/.local/state/aupr/state.db",
+		},
+		Worktree: WorktreeConfig{
+			ReusePolicy:  "per_pr",
+			BasePath:     "~/.workset",
+			BranchPrefix: "eric/",
+		},
+		Agent: AgentConfig{
+			Default:             "claude-code",
+			SessionReusePolicy:  "per_pr",
+			MaxTurnsPerFeedback: 15,
+			DryRun:              false,
+		},
+		Policy: PolicyConfig{
+			AutoAddressTypes:   []string{"typo", "style", "rename", "add-test", "flaky-ci"},
+			FlagButDontAct:     []string{"architectural", "revert", "security-touching"},
+			Skip:               []string{"draft", "approved", "dependabot"},
+			MaxFeedbackAgeDays: 14,
+		},
+		Notify: NotifyConfig{
+			SlackEnabled:       false,
+			SlackChannel:       "",
+			MacOSNotifications: false,
+			SummaryCadence:     "daily",
+		},
+		Repos: map[string]RepoOverride{},
+	}
+}
+
+// ResolvePath returns the path aupr will load from.
+func ResolvePath(override string) (string, error) {
+	if override != "" {
+		return expandHome(override)
+	}
+	if env := os.Getenv("AUPR_CONFIG"); env != "" {
+		return expandHome(env)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "aupr", "config.toml"), nil
+}
+
+// Load returns the effective config. If the resolved path is missing, defaults
+// are returned and the caller can proceed; explicit --config pointing at a
+// non-existent file is an error.
+func Load(override string) (*Config, error) {
+	path, err := ResolvePath(override)
+	if err != nil {
+		return nil, err
+	}
+	cfg := Defaults()
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if _, err := toml.Decode(string(data), cfg); err != nil {
+			return nil, fmt.Errorf("parse %s: %w", path, err)
+		}
+	case errors.Is(err, fs.ErrNotExist):
+		if override != "" {
+			return nil, fmt.Errorf("config file %s does not exist", path)
+		}
+		// fall through with defaults
+	default:
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	if err := validate(cfg); err != nil {
+		return nil, err
+	}
+	// Expand ~ in path-like fields so downstream code can treat them as absolute.
+	cfg.Daemon.Roots = expandAll(cfg.Daemon.Roots)
+	cfg.Daemon.LogPath, _ = expandHome(cfg.Daemon.LogPath)
+	cfg.Daemon.StatePath, _ = expandHome(cfg.Daemon.StatePath)
+	cfg.Worktree.BasePath, _ = expandHome(cfg.Worktree.BasePath)
+	return cfg, nil
+}
+
+// InitDefault writes the default config to disk if no file exists.
+// Returns the path and whether a file was written.
+func InitDefault(override string) (string, bool, error) {
+	path, err := ResolvePath(override)
+	if err != nil {
+		return "", false, err
+	}
+	if _, err := os.Stat(path); err == nil {
+		return path, false, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return "", false, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", false, err
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return "", false, err
+	}
+	defer f.Close()
+	if err := WriteTOML(f, Defaults()); err != nil {
+		return "", false, err
+	}
+	return path, true, nil
+}
+
+// Edit opens the config file in $EDITOR, creating defaults first if missing.
+func Edit(override string) error {
+	path, _, err := InitDefault(override)
+	if err != nil {
+		return err
+	}
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vi"
+	}
+	cmd := exec.Command(editor, path)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// WriteTOML encodes cfg as TOML to w.
+func WriteTOML(w io.Writer, cfg *Config) error {
+	enc := toml.NewEncoder(w)
+	enc.Indent = "  "
+	return enc.Encode(cfg)
+}
+
+func validate(cfg *Config) error {
+	if cfg.Daemon.TickMinutes <= 0 {
+		return errors.New("daemon.tick_minutes must be > 0")
+	}
+	if cfg.Daemon.BoundedConcurrency <= 0 {
+		return errors.New("daemon.bounded_concurrency must be > 0")
+	}
+	if len(cfg.Daemon.Roots) == 0 {
+		return errors.New("daemon.roots must not be empty")
+	}
+	switch cfg.Worktree.ReusePolicy {
+	case "per_pr", "per_repo_pool", "ephemeral":
+	default:
+		return fmt.Errorf("worktree.reuse_policy: invalid value %q", cfg.Worktree.ReusePolicy)
+	}
+	switch cfg.Agent.SessionReusePolicy {
+	case "per_pr", "fresh", "per_repo":
+	default:
+		return fmt.Errorf("agent.session_reuse_policy: invalid value %q", cfg.Agent.SessionReusePolicy)
+	}
+	switch cfg.Agent.Default {
+	case "claude-code", "codex", "opencode":
+	default:
+		return fmt.Errorf("agent.default: invalid value %q", cfg.Agent.Default)
+	}
+	return nil
+}
+
+func expandHome(p string) (string, error) {
+	if p == "" {
+		return p, nil
+	}
+	if !strings.HasPrefix(p, "~") {
+		return p, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p, err
+	}
+	if p == "~" {
+		return home, nil
+	}
+	if strings.HasPrefix(p, "~/") {
+		return filepath.Join(home, p[2:]), nil
+	}
+	return p, nil
+}
+
+func expandAll(paths []string) []string {
+	out := make([]string, len(paths))
+	for i, p := range paths {
+		ex, err := expandHome(p)
+		if err != nil {
+			out[i] = p
+		} else {
+			out[i] = ex
+		}
+	}
+	return out
+}
