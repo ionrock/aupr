@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/ionrock/aupr/internal/config"
 	"github.com/ionrock/aupr/internal/execx"
 	"github.com/ionrock/aupr/internal/feedback"
 	"github.com/ionrock/aupr/internal/policy"
@@ -45,9 +46,14 @@ type Agent interface {
 var ErrNotImplemented = errors.New("agent: backend not implemented")
 
 // Registry resolves an agent name to an Agent instance.
+//
+// The "command" backend is driven by the CommandConfig field; callers
+// (typically the scheduler) may point CommandConfig at a per-repo
+// override before calling Get("command").
 type Registry struct {
-	Runner execx.Runner
-	Logger *slog.Logger
+	Runner        execx.Runner
+	Logger        *slog.Logger
+	CommandConfig config.AgentCommandConfig
 }
 
 // Get returns an Agent for the named backend.
@@ -55,6 +61,8 @@ func (r *Registry) Get(name string) (Agent, error) {
 	switch name {
 	case "claude-code":
 		return &ClaudeCode{Runner: r.Runner, Logger: r.Logger}, nil
+	case "command":
+		return &Command{Cfg: r.CommandConfig, Runner: r.Runner, Logger: r.Logger}, nil
 	case "codex":
 		return &stub{name: "codex"}, nil
 	case "opencode":

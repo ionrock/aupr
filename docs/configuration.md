@@ -46,10 +46,18 @@ create_command = ["git", "worktree", "add", "{path}", "{branch}"] # argv array, 
 # examples of plugging in alternative tools (wt, superset.sh, etc.).
 
 [agent]
-default                 = "claude-code"  # claude-code | codex | opencode
+default                 = "claude-code"  # claude-code | codex | opencode | command
 session_reuse_policy    = "per_pr"       # per_pr | fresh | per_repo
 max_turns_per_feedback  = 15
 dry_run                 = false          # equivalent to --dry-run (merged via OR)
+
+[agent.command]
+# Pluggable backend. Tokens: {workspace}, {repo}, {nwo}, {branch},
+# {pr_number}, {pr_title}, {pr_url}, {session_id}, {max_turns}, {prompt}, {prompt_file}
+argv             = ["claude", "-p", "--output-format=json", "--max-turns={max_turns}", "{prompt}"]
+prompt_delivery  = "arg"            # arg | file
+session_id_from  = "json:session_id" # json:<dotted.path> | line:<prefix> | ""
+summary_from     = "line:SUMMARY:"   # same forms
 
 [policy]
 auto_address_types    = ["typo", "style", "rename", "add-test", "flaky-ci"]
@@ -65,10 +73,16 @@ summary_cadence      = "daily"     # never | per_action | daily
 
 # Per-repo overrides, keyed by "owner/name".
 [repos."dagster-io/internal"]
-agent               = "codex"
+agent               = "command"
 bounded_concurrency = 1
 quality_gates       = ["just check"]
 skip                = false        # or true to blacklist a repo
+# Per-repo 'command' backend overrides the global argv wholesale:
+[repos."dagster-io/internal".agent_command]
+argv            = ["internal-ai-wrap", "--pr={pr_number}", "--prompt-file={prompt_file}"]
+prompt_delivery = "file"
+session_id_from = "json:id"
+summary_from    = "line:RESULT:"
 
 [repos."ionrock/workset"]
 agent = "claude-code"
@@ -91,6 +105,76 @@ quality_gates = ["cask eval", "emacs -batch -l ert -l test/workset-test.el -f er
 
 `config show` will render the new field automatically; that's your
 sanity check.
+
+## Agent backends
+
+`[agent] default` picks which backend the scheduler invokes. Options:
+
+| Backend | Status | Notes |
+|---|---|---|
+| `claude-code` | ✅ | Wraps `claude -p --output-format=json`, knows the JSON schema, parses `session_id` / `result` fields. |
+| `command` | ✅ | Pluggable. Runs any argv you configure with token substitution. Use this for custom wrappers, team tooling, or alternative LLM CLIs. |
+| `codex` | stub | Returns `ErrNotImplemented`; wiring deferred. |
+| `opencode` | stub | Same. |
+
+### The `command` backend in detail
+
+Mirrors the `worktree.create_command` design: argv array, token
+substitution, cwd = `{workspace}`, exit 0 means success.
+
+**Tokens** (available in every argv element):
+
+| Token | Value |
+|---|---|
+| `{workspace}` | absolute workspace path |
+| `{repo}` | repo name (e.g. `internal`) |
+| `{nwo}` | `owner/name` |
+| `{branch}` | PR head branch |
+| `{pr_number}` / `{pr_title}` / `{pr_url}` | PR metadata |
+| `{session_id}` | previous session id from state DB; `""` if fresh |
+| `{max_turns}` | decimal from `[agent] max_turns_per_feedback` |
+| `{prompt}` | the rendered prompt (valid when `prompt_delivery="arg"`) |
+| `{prompt_file}` | temp-file path (valid when `prompt_delivery="file"`) |
+
+**`prompt_delivery`**:
+- `"arg"` (default): substitute `{prompt}` into argv directly. Simple;
+  fine for prompts under a few hundred KB. If the token is absent from
+  argv, the prompt is discarded — your command needs to look elsewhere.
+- `"file"`: write the prompt to a temp file, substitute `{prompt_file}`
+  with its path. aupr removes the file after the command returns. Use
+  this when your backend expects a `--prompt-file` flag or similar.
+
+**`session_id_from` / `summary_from`** parse the command's stdout.
+Forms:
+
+- `"json:foo.bar"` — parse stdout (or any NDJSON line, last-first) as
+  JSON and descend the dotted path. Strings, numbers, and bools are
+  stringified.
+- `"line:PREFIX"` — first line whose trimmed form starts with `PREFIX`.
+  The prefix is stripped; the rest is trimmed and returned.
+- `""` (or omitted) — skip; session id falls back to whatever the caller
+  passed in; summary falls back to the last non-empty stdout line.
+
+**Per-repo override** uses `[repos."owner/name"].agent_command` and
+replaces the entire `[agent.command]` block for that repo. Combine with
+`agent = "command"` under the same repo override to force the command
+backend even when `[agent] default` is something else.
+
+**Example: invoke an internal wrapper for one monorepo**
+
+```toml
+[agent]
+default = "claude-code"
+
+[repos."dagster-io/internal"]
+agent = "command"
+
+[repos."dagster-io/internal".agent_command]
+argv            = ["dagster-ai", "address", "--pr={pr_number}", "--branch={branch}", "--prompt={prompt_file}"]
+prompt_delivery = "file"
+session_id_from = "json:session.id"
+summary_from    = "line:DONE:"
+```
 
 ## Worktree handling
 

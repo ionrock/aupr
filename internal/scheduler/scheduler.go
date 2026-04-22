@@ -68,7 +68,11 @@ func New(cfg *config.Config, logger *slog.Logger, st state.Store) *Scheduler {
 		runner:   runner,
 		state:    st,
 		notifier: &notify.Log{Logger: logger},
-		agents:   &agent.Registry{Runner: runner, Logger: logger},
+		agents: &agent.Registry{
+			Runner:        runner,
+			Logger:        logger,
+			CommandConfig: cfg.Agent.Command,
+		},
 	}
 }
 
@@ -232,11 +236,21 @@ func (s *Scheduler) act(
 		return "circuit-break"
 	}
 
-	// Pick agent.
+	// Pick agent. Per-repo override may swap the agent AND/OR the
+	// command-backend argv for the "command" agent.
 	agentName := s.cfg.Agent.Default
-	if ov, ok := s.cfg.Repos[pr.Repo]; ok && ov.Agent != "" {
-		agentName = ov.Agent
+	commandCfg := s.cfg.Agent.Command
+	if ov, ok := s.cfg.Repos[pr.Repo]; ok {
+		if ov.Agent != "" {
+			agentName = ov.Agent
+		}
+		if len(ov.AgentCommand.Argv) > 0 {
+			// Per-repo command overrides the global one wholesale.
+			commandCfg = ov.AgentCommand
+		}
 	}
+	// Give the registry the right command config for this repo's invocation.
+	s.agents.CommandConfig = commandCfg
 	ag, err := s.agents.Get(agentName)
 	if err != nil {
 		s.logger.Error("agent registry", "err", err)

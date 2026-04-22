@@ -39,11 +39,15 @@ internal/state/                Persistence. Store interface with Memory
                                pr_cursor, attempts, agent_sessions,
                                pr_skip.
 internal/agent/                Pluggable agent backend. Registry.Get()
-                               resolves a name (claude-code | codex |
-                               opencode) to an Agent. Today only
-                               claude-code is wired (invokes
-                               `claude -p --output-format=json`); the
-                               others return ErrNotImplemented.
+                               resolves a name to an Agent:
+                                 claude-code: built-in wrapper over
+                                   `claude -p --output-format=json`
+                                 command:     user-configured argv with
+                                   token substitution (see
+                                   docs/configuration.md)
+                                 codex/opencode: stubs for now
+                               Per-repo [repos."x/y"].agent_command
+                               lets one repo swap the argv wholesale.
 internal/land/                 "Landing the plane": quality gates (auto-
                                detected from justfile/Makefile/go.mod/
                                pyproject.toml/package.json), pull-rebase,

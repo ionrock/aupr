@@ -58,10 +58,37 @@ type WorktreeConfig struct {
 
 // AgentConfig controls which coding agent is invoked and how its session is reused.
 type AgentConfig struct {
-	Default             string `toml:"default"`
-	SessionReusePolicy  string `toml:"session_reuse_policy"`
-	MaxTurnsPerFeedback int    `toml:"max_turns_per_feedback"`
-	DryRun              bool   `toml:"dry_run"`
+	Default             string             `toml:"default"`
+	SessionReusePolicy  string             `toml:"session_reuse_policy"`
+	MaxTurnsPerFeedback int                `toml:"max_turns_per_feedback"`
+	DryRun              bool               `toml:"dry_run"`
+	Command             AgentCommandConfig `toml:"command"`
+}
+
+// AgentCommandConfig configures the generic "command" agent backend.
+// The command must produce exit 0 on success. Output parsing (for
+// session_id and summary) is optional; if unset, the agent records
+// success with an empty session and uses the last non-empty stdout
+// line as a summary.
+//
+// Tokens available in both argv elements:
+//
+//	{workspace}   absolute workspace path
+//	{repo}        repo name (e.g. "internal")
+//	{nwo}         owner/name
+//	{branch}      PR head branch
+//	{pr_number}   PR number
+//	{pr_title}    PR title
+//	{pr_url}      PR URL
+//	{session_id}  previous session ID (empty string if fresh)
+//	{max_turns}   decimal
+//	{prompt}      the rendered prompt (only when prompt_delivery="arg")
+//	{prompt_file} temp-file path (only when prompt_delivery="file")
+type AgentCommandConfig struct {
+	Argv           []string `toml:"argv"`
+	PromptDelivery string   `toml:"prompt_delivery"` // "arg" | "file"
+	SessionIDFrom  string   `toml:"session_id_from"` // "json:field" | "line:prefix" | ""
+	SummaryFrom    string   `toml:"summary_from"`
 }
 
 // PolicyConfig defines what the daemon will and won't act on.
@@ -82,10 +109,11 @@ type NotifyConfig struct {
 
 // RepoOverride is per-repo config keyed by "owner/name".
 type RepoOverride struct {
-	Agent              string   `toml:"agent"`
-	BoundedConcurrency int      `toml:"bounded_concurrency"`
-	QualityGates       []string `toml:"quality_gates"`
-	Skip               bool     `toml:"skip"`
+	Agent              string             `toml:"agent"`
+	BoundedConcurrency int                `toml:"bounded_concurrency"`
+	QualityGates       []string           `toml:"quality_gates"`
+	Skip               bool               `toml:"skip"`
+	AgentCommand       AgentCommandConfig `toml:"agent_command"`
 }
 
 // Defaults returns the baked-in default config.
@@ -110,6 +138,12 @@ func Defaults() *Config {
 			SessionReusePolicy:  "per_pr",
 			MaxTurnsPerFeedback: 15,
 			DryRun:              false,
+			Command: AgentCommandConfig{
+				Argv:           []string{"claude", "-p", "--output-format=json", "--max-turns={max_turns}", "{prompt}"},
+				PromptDelivery: "arg",
+				SessionIDFrom:  "json:session_id",
+				SummaryFrom:    "line:SUMMARY:",
+			},
 		},
 		Policy: PolicyConfig{
 			AutoAddressTypes:   []string{"typo", "style", "rename", "add-test", "flaky-ci"},
@@ -254,9 +288,19 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("agent.session_reuse_policy: invalid value %q", cfg.Agent.SessionReusePolicy)
 	}
 	switch cfg.Agent.Default {
-	case "claude-code", "codex", "opencode":
+	case "claude-code", "codex", "opencode", "command":
 	default:
 		return fmt.Errorf("agent.default: invalid value %q", cfg.Agent.Default)
+	}
+	if cfg.Agent.Default == "command" && len(cfg.Agent.Command.Argv) == 0 {
+		return errors.New("agent.command.argv must not be empty when default=command")
+	}
+	if cfg.Agent.Command.PromptDelivery != "" {
+		switch cfg.Agent.Command.PromptDelivery {
+		case "arg", "file":
+		default:
+			return fmt.Errorf("agent.command.prompt_delivery: invalid value %q (want arg|file)", cfg.Agent.Command.PromptDelivery)
+		}
 	}
 	return nil
 }
