@@ -19,8 +19,9 @@ internal/config/               TOML loader + validator. Defaults() is the
 internal/logging/              slog JSON handler to stderr.
 internal/execx/                Subprocess runner with context deadlines and
                                token redaction. Every external command
-                               (git, gh, wt, claude, codex) must go through
-                               this so tests can swap in a fake.
+                               (git, gh, claude, codex, user-configured
+                               create_command) must go through this so
+                               tests can swap in a fake.
 internal/discovery/            Walks roots, finds .git dirs, parses
                                .git/config to resolve GitHub remotes.
                                Handles linked worktrees by following the
@@ -35,6 +36,13 @@ internal/policy/               The classifier. Decides AUTO / FLAG / SKIP
 internal/state/                Cursor store: last acted-on event ID per PR.
                                M1 has an in-memory implementation; M3 swaps
                                in sqlite behind the same Store interface.
+internal/worktree/             Plans and acquires a workspace for a PR.
+                               Prefers existing worktrees (git worktree
+                               list --porcelain); otherwise follows the
+                               configured mode: create (run a pluggable
+                               command), checkout (swap branches in the
+                               main repo with stash protection + prompt),
+                               or skip. See docs/configuration.md.
 internal/scheduler/            One-tick orchestrator. Drives discovery,
                                feedback fetching, classification, and
                                table rendering. Will host the goroutine
@@ -66,13 +74,19 @@ internal/scheduler/            One-tick orchestrator. Drives discovery,
       cursor := state.Store.LastSeen(repo, pr)
       decision := policy.Engine.Classify(pr, events, cursor)
 
-4. scheduler.renderTable(decisions) → stdout
+      if decision.Action != SKIP:
+          plan := worktree.Manager.Plan(repo, pr)
+              (one `git worktree list --porcelain` per non-skipped PR;
+               no mutations)
+
+4. scheduler.renderTable(decisions, plans) → stdout
       Log line: "aupr tick: done"
 ```
 
 Dry-run is threaded through as `scheduler.Options{DryRun: bool}` and — once
-M2 introduces writes — will gate every mutating call site. Today, nothing
-mutates, so dry-run just prints the banner and is otherwise a no-op.
+agent invocation lands in M3 — will gate every mutating call site. Today,
+`Plan` is the only worktree-package call reachable; `Acquire` only runs
+when the scheduler decides to act on a PR, which requires the agent loop.
 
 ## Process topology (forward-looking)
 
@@ -99,9 +113,9 @@ new code so we don't back ourselves into a corner.
 | Tool | Why | Auth state we assume |
 |---|---|---|
 | `gh` | PR + comment enumeration (M1), comment replies (M3) | Already authed as `ionrock` |
-| `git` | Worktree state checks, rebase, push (M2+) | SSH remotes |
-| `wt` | Worktree acquisition (M2+) | `wt list --format=json` available |
-| `claude` / `codex` / `opencode` | Agent invocation (M2+) | Authed; session IDs persisted |
+| `git` | `worktree list`, `stash`, `checkout`, `pull --rebase`, `push` | SSH remotes configured |
+| `create_command` (configurable) | Produce a workspace when none exists. Default: `git worktree add`. Can also be `wt`, `superset.sh`, or any team-specific wrapper | argv-callable; prints nothing we need to parse |
+| `claude` / `codex` / `opencode` | Agent invocation (M3+) | Authed; session IDs persisted |
 
 All of these are invoked through `execx.Runner`, never with `os/exec`
 directly, so every test can substitute a fake.

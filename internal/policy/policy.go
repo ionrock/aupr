@@ -23,18 +23,18 @@ const (
 
 // Decision explains a single PR's disposition.
 type Decision struct {
-	PR          feedback.PR
-	Action      Action
-	Reason      string
-	NewEvents   []feedback.Event // events newer than the last acted cursor
+	PR              feedback.PR
+	Action          Action
+	Reason          string
+	NewEvents       []feedback.Event // events newer than the last acted cursor
 	Classifications []EventClass
 }
 
 // EventClass tags a single feedback event.
 type EventClass struct {
-	Event   feedback.Event
-	Action  Action
-	Reason  string
+	Event  feedback.Event
+	Action Action
+	Reason string
 }
 
 // Engine holds the rules.

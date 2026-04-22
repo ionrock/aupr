@@ -2,10 +2,10 @@
 //
 // Resolution order (first match wins for the path, then fields merge over
 // the baked-in defaults):
-//   1. --config flag
-//   2. $AUPR_CONFIG environment variable
-//   3. ~/.config/aupr/config.toml
-//   4. bundled defaults (used if no file exists)
+//  1. --config flag
+//  2. $AUPR_CONFIG environment variable
+//  3. ~/.config/aupr/config.toml
+//  4. bundled defaults (used if no file exists)
 package config
 
 import (
@@ -23,29 +23,37 @@ import (
 
 // Config is the top-level daemon configuration.
 type Config struct {
-	Daemon   DaemonConfig              `toml:"daemon"`
-	Worktree WorktreeConfig            `toml:"worktree"`
-	Agent    AgentConfig               `toml:"agent"`
-	Policy   PolicyConfig              `toml:"policy"`
-	Notify   NotifyConfig              `toml:"notify"`
-	Repos    map[string]RepoOverride   `toml:"repos"`
+	Daemon   DaemonConfig            `toml:"daemon"`
+	Worktree WorktreeConfig          `toml:"worktree"`
+	Agent    AgentConfig             `toml:"agent"`
+	Policy   PolicyConfig            `toml:"policy"`
+	Notify   NotifyConfig            `toml:"notify"`
+	Repos    map[string]RepoOverride `toml:"repos"`
 }
 
 // DaemonConfig drives the main loop.
 type DaemonConfig struct {
-	TickMinutes         int      `toml:"tick_minutes"`
-	Roots               []string `toml:"roots"`
-	GithubUser          string   `toml:"github_user"`
-	BoundedConcurrency  int      `toml:"bounded_concurrency"`
-	LogPath             string   `toml:"log_path"`
-	StatePath           string   `toml:"state_path"`
+	TickMinutes        int      `toml:"tick_minutes"`
+	Roots              []string `toml:"roots"`
+	GithubUser         string   `toml:"github_user"`
+	BoundedConcurrency int      `toml:"bounded_concurrency"`
+	LogPath            string   `toml:"log_path"`
+	StatePath          string   `toml:"state_path"`
 }
 
-// WorktreeConfig controls how worktrees are acquired and reused.
+// WorktreeConfig controls how aupr gets a workspace for a PR.
+//
+// Resolution order is always:
+//  1. Use an existing worktree whose checked-out branch matches pr.HeadRefName.
+//  2. Otherwise fall back to `Mode`:
+//     "create"   - run CreateCommand to materialize a new worktree
+//     "checkout" - use the main repo; swap branches with stash protection
+//     "skip"     - never act without a pre-existing worktree
 type WorktreeConfig struct {
-	ReusePolicy  string `toml:"reuse_policy"`
-	BasePath     string `toml:"base_path"`
-	BranchPrefix string `toml:"branch_prefix"`
+	Mode          string   `toml:"mode"`
+	PathTemplate  string   `toml:"path_template"`
+	CreateCommand []string `toml:"create_command"`
+	RemoveCommand []string `toml:"remove_command"`
 }
 
 // AgentConfig controls which coding agent is invoked and how its session is reused.
@@ -92,9 +100,10 @@ func Defaults() *Config {
 			StatePath:          "~/.local/state/aupr/state.db",
 		},
 		Worktree: WorktreeConfig{
-			ReusePolicy:  "per_pr",
-			BasePath:     "~/.workset",
-			BranchPrefix: "eric/",
+			Mode:          "create",
+			PathTemplate:  "~/.workset/{repo}/{branch}",
+			CreateCommand: []string{"git", "worktree", "add", "{path}", "{branch}"},
+			RemoveCommand: nil,
 		},
 		Agent: AgentConfig{
 			Default:             "claude-code",
@@ -163,7 +172,6 @@ func Load(override string) (*Config, error) {
 	cfg.Daemon.Roots = expandAll(cfg.Daemon.Roots)
 	cfg.Daemon.LogPath, _ = expandHome(cfg.Daemon.LogPath)
 	cfg.Daemon.StatePath, _ = expandHome(cfg.Daemon.StatePath)
-	cfg.Worktree.BasePath, _ = expandHome(cfg.Worktree.BasePath)
 	return cfg, nil
 }
 
@@ -227,10 +235,18 @@ func validate(cfg *Config) error {
 	if len(cfg.Daemon.Roots) == 0 {
 		return errors.New("daemon.roots must not be empty")
 	}
-	switch cfg.Worktree.ReusePolicy {
-	case "per_pr", "per_repo_pool", "ephemeral":
+	switch cfg.Worktree.Mode {
+	case "create", "checkout", "skip":
 	default:
-		return fmt.Errorf("worktree.reuse_policy: invalid value %q", cfg.Worktree.ReusePolicy)
+		return fmt.Errorf("worktree.mode: invalid value %q (want create|checkout|skip)", cfg.Worktree.Mode)
+	}
+	if cfg.Worktree.Mode == "create" {
+		if cfg.Worktree.PathTemplate == "" {
+			return errors.New("worktree.path_template must not be empty when mode=create")
+		}
+		if len(cfg.Worktree.CreateCommand) == 0 {
+			return errors.New("worktree.create_command must not be empty when mode=create")
+		}
 	}
 	switch cfg.Agent.SessionReusePolicy {
 	case "per_pr", "fresh", "per_repo":

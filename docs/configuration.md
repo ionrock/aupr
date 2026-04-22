@@ -37,9 +37,13 @@ log_path             = "~/.local/state/aupr/aupr.log"
 state_path           = "~/.local/state/aupr/state.db"      # sqlite cursor DB (M3+)
 
 [worktree]
-reuse_policy  = "per_pr"        # per_pr | per_repo_pool | ephemeral
-base_path     = "~/.workset"    # matches `wt`'s default
-branch_prefix = "eric/"         # matches Eric's convention
+mode           = "create"                                        # create | checkout | skip
+path_template  = "~/.workset/{repo}/{branch}"                    # where new worktrees go
+create_command = ["git", "worktree", "add", "{path}", "{branch}"] # argv array, tokens substituted
+# remove_command = ["git", "worktree", "remove", "--force", "{path}"]  # optional, unused today
+
+# See "Worktree handling" below for the full contract, token list, and
+# examples of plugging in alternative tools (wt, superset.sh, etc.).
 
 [agent]
 default                 = "claude-code"  # claude-code | codex | opencode
@@ -87,6 +91,81 @@ quality_gates = ["cask eval", "emacs -batch -l ert -l test/workset-test.el -f er
 
 `config show` will render the new field automatically; that's your
 sanity check.
+
+## Worktree handling
+
+aupr's resolution order for acquiring a workspace is always:
+
+1. **Existing worktree wins.** If any linked worktree of the repo has the
+   PR's head branch checked out, aupr uses it as-is. This is the LLM-tool
+   interop path — if superset.sh or a human already prepared a workspace
+   for this branch, aupr operates there.
+2. **Fallback to `mode`:**
+   - `create` (default): run `create_command` to make a new worktree at
+     `path_template`.
+   - `checkout`: use the main repo; swap branches with stash protection.
+     Always prompts interactively; the daemon always skips-and-flags.
+   - `skip`: never act without a pre-existing worktree.
+
+### Token substitution
+
+Tokens are literal-string replacements (no templating language). Available
+in both `path_template` and each element of `create_command`:
+
+| Token | Value |
+|---|---|
+| `{repo}` | repo name (e.g. `internal`) |
+| `{nwo}` | `owner/name` (e.g. `dagster-io/internal`) |
+| `{branch}` | PR head branch name (e.g. `eric/redis-max-conns`) |
+| `{repo_path}` | absolute path of the main checkout |
+| `{path}` | resolved `path_template` (only inside `create_command`) |
+
+### `create_command` contract
+
+- **Argv array, not shell.** TOML array form. aupr never spawns `sh -c`, so
+  `{branch}` with slashes or odd characters is safe.
+- **Cwd is `{repo_path}`.** That matches `git worktree add`, `wt`, and
+  `superset.sh` expectations.
+- **Success is verified**, in order: exit 0 → `{path}` exists →
+  `git -C {path} rev-parse --abbrev-ref HEAD` equals `{branch}`. Any
+  failure FLAGs the PR and leaves it untouched.
+- **Output is not parsed.** stdout/stderr go to the log at DEBUG; if your
+  command prints a path, we don't read it — the destination is `{path}`.
+
+### Examples
+
+```toml
+# Default
+create_command = ["git", "worktree", "add", "{path}", "{branch}"]
+
+# Use wt so its hooks fire
+create_command = ["wt", "switch", "-c", "{branch}", "--no-cd", "-y"]
+
+# Pre-seed a superset.sh LLM session
+create_command = ["superset.sh", "worktree", "--branch", "{branch}", "--path", "{path}"]
+
+# Per-repo override: different tool, different scratch disk
+[repos."dagster-io/internal"]
+worktree.create_command = ["dagster-wt", "new", "{branch}"]
+worktree.path_template  = "/scratch/{repo}/{branch}"
+```
+
+### `mode = "checkout"` protocol
+
+Used when you want aupr to swap branches in the main repo rather than
+create a new worktree. The sequence:
+
+1. Interactive prompt. Daemon mode skips-and-FLAGs — never silent.
+2. If dirty: `git stash push --include-untracked --message "aupr: auto-stash…"`.
+3. `git fetch origin {branch}`.
+4. `git checkout {branch}`.
+5. `git pull --rebase origin {branch}`.
+6. (agent session runs)
+7. On release: `git checkout <original-branch>` then `git stash pop` if stashed.
+
+Failure at any point: aupr best-effort-restores the original branch and
+**preserves the stash**, logging the exact `git stash pop stash@{N}`
+command needed to recover. aupr never runs `git stash drop` automatically.
 
 ## `--dry-run` merge rule
 

@@ -121,23 +121,43 @@ aupr (launchd)
 SQLite at `~/.local/state/aupr/state.db` with tables:
 - `pr_cursor` — (repo, pr_number) → last_seen_comment_id, last_acted_at, last_commit_pushed
 - `attempts` — (pr_number, feedback_id, started_at, agent, outcome, notes)
-- `worktree_leases` — (worktree_path, pr_number, acquired_at, released_at)
+- `workspace_leases` — (path, pr_number, mode, acquired_at, released_at,
+  original_branch, stash_ref) — needed so M3 restart-recovery can un-stash
+  and restore branches if aupr was SIGKILL'd mid-protocol
 - `agent_sessions` — (session_id, agent, worktree_path, last_used_at)
 
-### 4.4 Worktree reuse strategy (configurable)
+### 4.4 Workspace acquisition
 
-Config knob: `worktree_reuse_policy`
-- `per_pr` (default): one worktree per PR branch for the life of the PR.
-  Path convention `~/.workset/<repo>/<branch>`. Reuse on subsequent feedback.
-- `per_repo_pool`: N worktrees per repo, assigned round-robin. Cheaper on
-  disk for low-touch repos.
-- `ephemeral`: fresh worktree per feedback event. Safest, slowest.
+aupr does not own worktree lifecycle. It observes what exists (created by
+humans, `wt`, `superset.sh`, or anyone else) and uses it; when nothing
+matches, it falls back to a configurable `mode`.
 
-Reuse rule:
-1. Check `wt list --format=json` for an existing worktree on the PR's branch.
-2. If yes, and `git status` is clean, use it. Run `git pull --rebase origin <branch>`.
-3. If yes but dirty (from a human session), DO NOT touch — log and skip.
-4. If no, `wt switch -c <branch> --no-cd -y`.
+**Resolution order (always):**
+
+1. `git worktree list --porcelain` in the repo. If any linked worktree has
+   `pr.HeadRefName` checked out, use it. This is the LLM-tool interop path
+   — if superset.sh or a human already prepared a workspace for this
+   branch, we operate there.
+2. Otherwise fall back to `[worktree] mode`:
+   - `create` (default): run the configured `create_command` (default
+     `git worktree add {path} {branch}`) to materialize a new worktree at
+     `path_template` (default `~/.workset/{repo}/{branch}`).
+   - `checkout`: swap branches in the main repo. Always prompts in
+     interactive mode; the daemon always skips-and-FLAGs (no silent swaps).
+     When accepted, uses the full stash→checkout→rebase→restore protocol
+     with preserved stash on any failure.
+   - `skip`: never act without a pre-existing worktree; FLAG the PR.
+
+**Creation is pluggable.** `create_command` is an argv array with token
+substitution (`{path}`, `{branch}`, `{repo}`, `{nwo}`, `{repo_path}`). Any
+tool that produces a worktree on the requested branch will work — `wt`,
+`superset.sh`, or a team-specific wrapper. After the command runs, aupr
+verifies exit 0, destination exists, and `HEAD == branch`; any failure
+flags the PR and does not proceed.
+
+**aupr never runs `git worktree add` implicitly** (only when that's the
+configured `create_command`, which happens to be the default). **aupr
+never runs `wt`**; `wt` is just one possible `create_command` value.
 
 ### 4.5 LLM session reuse strategy (configurable)
 
@@ -201,9 +221,10 @@ bounded_concurrency = 2
 log_path = "~/.local/state/aupr/aupr.log"
 
 [worktree]
-reuse_policy = "per_pr"       # per_pr | per_repo_pool | ephemeral
-base_path = "~/.workset"
-branch_prefix = "eric/"
+mode = "create"               # create | checkout | skip
+path_template = "~/.workset/{repo}/{branch}"
+create_command = ["git", "worktree", "add", "{path}", "{branch}"]
+# remove_command = ["git", "worktree", "remove", "--force", "{path}"]  # optional
 
 [agent]
 default = "claude-code"       # claude-code | codex | opencode

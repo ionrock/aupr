@@ -3,8 +3,8 @@
 PR feedback daemon — polls your open PRs on a cadence and spawns an AI
 coding session in an appropriate git worktree to address new human feedback.
 
-**Status:** M1 shipped (read-only scout). See [PLAN.md](./PLAN.md) for
-roadmap and [docs/](./docs/) for reference.
+**Status:** M1 + M2 shipped (read-only scout with worktree planning).
+See [PLAN.md](./PLAN.md) for roadmap and [docs/](./docs/) for reference.
 
 ## Scope
 

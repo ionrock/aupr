@@ -17,23 +17,23 @@ import (
 
 // PR is a normalized open PR authored by the user.
 type PR struct {
-	Repo          string    // "owner/name"
-	Number        int
-	Title         string
-	URL           string
-	HeadRefName   string
-	BaseRefName   string
-	IsDraft       bool
-	Mergeable     string // MERGEABLE / CONFLICTING / UNKNOWN
+	Repo           string // "owner/name"
+	Number         int
+	Title          string
+	URL            string
+	HeadRefName    string
+	BaseRefName    string
+	IsDraft        bool
+	Mergeable      string // MERGEABLE / CONFLICTING / UNKNOWN
 	ReviewDecision string // APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED / ""
-	UpdatedAt     time.Time
-	CreatedAt     time.Time
-	Author        string
+	UpdatedAt      time.Time
+	CreatedAt      time.Time
+	Author         string
 }
 
 // Event is one normalized piece of reviewer feedback on a PR.
 type Event struct {
-	ID        string    // stable identifier (comment node id)
+	ID        string // stable identifier (comment node id)
 	PR        PR
 	Kind      Kind
 	Author    string

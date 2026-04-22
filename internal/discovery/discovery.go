@@ -15,12 +15,12 @@ import (
 
 // Repo is a discovered git repository with a resolved GitHub remote.
 type Repo struct {
-	Path     string // absolute path on disk
-	Remote   string // the raw remote URL
-	Owner    string // GitHub owner
-	Name     string // GitHub repo name
-	NWO      string // "owner/name"
-	Default  string // default remote name (usually "origin")
+	Path    string // absolute path on disk
+	Remote  string // the raw remote URL
+	Owner   string // GitHub owner
+	Name    string // GitHub repo name
+	NWO     string // "owner/name"
+	Default string // default remote name (usually "origin")
 }
 
 // Walker discovers repos by walking filesystem roots.

@@ -6,7 +6,9 @@
 - `gh` CLI authenticated as the operator whose PRs you want to monitor
   (check with `gh auth status`)
 - SSH-based git remotes on GitHub (aupr never prompts for HTTPS creds)
-- For M2+: `wt`, `claude` / `codex` / `opencode`
+- For M3+: `claude` / `codex` / `opencode` (agent invocation)
+- Optional: `wt`, `superset.sh`, or any worktree-producing tool you want
+  to configure as `[worktree] create_command`
 
 ## Layout
 
@@ -112,6 +114,6 @@ There is no release automation yet. When we need one:
 |---|---|---|
 | M0 | ✅ shipped | go mod, cobra→urfave CLI, config, Makefile |
 | M1 | ✅ shipped | discovery, feedback, policy, scheduler, `aupr once` |
-| M2 | planned | `internal/worktree/`, `internal/agent/`, still dry-run |
-| M3 | planned | writes, state (sqlite), launchd, audit trail |
+| M2 | ✅ shipped | `internal/worktree/` with plan/acquire/release, stash-protected checkout, pluggable create_command, scheduler shows WORKSPACE column |
+| M3 | planned | `internal/agent/`, state (sqlite), launchd, audit trail, crash-recovery stash scan |
 | M4 | planned | per-repo tuning, Slack digest, status CLI polish |
