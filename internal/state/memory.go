@@ -15,6 +15,8 @@ type Memory struct {
 	skipped     map[string]Skip
 	paused      bool
 	pauseReason string
+	recovery    map[string]RecoveryStash
+	settings    map[string]string
 }
 
 // NewMemory returns an empty Memory store.
@@ -23,6 +25,8 @@ func NewMemory() *Memory {
 		cursors:  map[string]Cursor{},
 		sessions: map[string]Session{},
 		skipped:  map[string]Skip{},
+		recovery: map[string]RecoveryStash{},
+		settings: map[string]string{},
 	}
 }
 
@@ -164,6 +168,83 @@ func (m *Memory) ListSkipped(_ context.Context) ([]Skip, error) {
 		out = append(out, s)
 	}
 	return out, nil
+}
+
+// AttemptsSince returns attempts with FinishedAt >= since.
+func (m *Memory) AttemptsSince(_ context.Context, since time.Time) ([]Attempt, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []Attempt
+	for i := len(m.attempts) - 1; i >= 0; i-- {
+		a := m.attempts[i]
+		if a.FinishedAt.Before(since) {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}
+
+// SeenRecoveryStash implements Store.
+func (m *Memory) SeenRecoveryStash(_ context.Context, repoPath, ref, message string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := repoPath + "\x00" + ref
+	if _, ok := m.recovery[key]; ok {
+		return false, nil
+	}
+	now := time.Now()
+	m.recovery[key] = RecoveryStash{
+		RepoPath: repoPath, Ref: ref, Message: message,
+		FirstSeenAt: now, NotifiedAt: now,
+	}
+	return true, nil
+}
+
+// ForgetRecoveryStashes implements Store.
+func (m *Memory) ForgetRecoveryStashes(_ context.Context, repoPath string, keepRefs []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	keep := map[string]struct{}{}
+	for _, r := range keepRefs {
+		keep[r] = struct{}{}
+	}
+	for k, v := range m.recovery {
+		if v.RepoPath != repoPath {
+			continue
+		}
+		if _, ok := keep[v.Ref]; !ok {
+			delete(m.recovery, k)
+		}
+	}
+	return nil
+}
+
+// ListRecoveryStashes implements Store.
+func (m *Memory) ListRecoveryStashes(_ context.Context) ([]RecoveryStash, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]RecoveryStash, 0, len(m.recovery))
+	for _, v := range m.recovery {
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// GetSetting implements Store.
+func (m *Memory) GetSetting(_ context.Context, key string) (string, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok := m.settings[key]
+	return v, ok, nil
+}
+
+// SetSetting implements Store.
+func (m *Memory) SetSetting(_ context.Context, key, value string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.settings[key] = value
+	return nil
 }
 
 // Close implements Store.

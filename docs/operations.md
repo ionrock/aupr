@@ -82,6 +82,68 @@ launchctl load   ~/Library/LaunchAgents/io.ionrock.aupr.plist
 
 Or re-run `scripts/install-launchd.sh` with a modified script.
 
+## Daily digest
+
+When `[notify] summary_cadence = "daily"`:
+
+- Per-event success ("acted") notifications are suppressed. Errors,
+  circuit-breaker trips, and recovery-stash alerts still fire
+  immediately.
+- On each tick, aupr checks the `last_digest_at` setting; if >= 24h
+  have passed (or it has never run), it assembles a digest of the last
+  24h and sends it via the notifier (Slack/macOS/log).
+- Digest content: attempt counts by outcome, per-repo activity, up to
+  10 error lines, and any tracked recovery stashes.
+
+At any time you can run `aupr digest` to see the summary on stdout
+without advancing the timestamp; `aupr digest --since 72h` widens
+the window.
+
+Cadence values:
+
+| `summary_cadence` | Successes | Errors | Daily digest |
+|---|---|---|---|
+| `per_action` (default) | notify each | notify each | no |
+| `daily` | suppressed | notify each | yes |
+| `never` | suppressed | notify each | no |
+
+## Recovery stashes
+
+An interrupted `mode = "checkout"` protocol (SIGKILL mid-swap, crash)
+leaves a stash behind with the message `aupr: auto-stash <orig>-><target>`.
+
+Every tick aupr scans all discovered repos for these and:
+
+1. Records new ones in `recovery_stashes` (SQLite).
+2. Notifies on first sight (Slack + macOS + log) with the exact
+   `git stash pop` recovery command.
+3. Forgets entries whose stashes have disappeared (you popped them).
+
+Inspect outstanding stashes:
+
+```bash
+aupr recovery
+```
+
+## Cost tracking
+
+If the agent backend reports token usage and cost, aupr persists them
+on each attempt and aggregates them in the digest.
+
+- **claude-code** parses `total_cost_usd` and `usage.{input,output}_tokens`
+  out of `claude -p --output-format=json` natively.
+- **command** backend: set `input_tokens_from`, `output_tokens_from`,
+  `cost_usd_from` in `[agent.command]`, same form as `session_id_from`
+  (`json:path` or `line:prefix`).
+
+Report:
+
+```bash
+aupr digest               # shows tokens + cost for the last 24h
+sqlite3 ~/.local/state/aupr/state.db \
+  "SELECT date(finished_at, 'unixepoch') AS day, sum(input_tokens), sum(output_tokens), printf('$%.2f', sum(cost_usd)) FROM attempts GROUP BY day ORDER BY day DESC;"
+```
+
 ## State database
 
 Default path: `~/.local/state/aupr/state.db` (SQLite, WAL mode).
@@ -92,6 +154,8 @@ Default path: `~/.local/state/aupr/state.db` (SQLite, WAL mode).
 | `attempts` | One row per act attempt — start/finish timestamps, agent, outcome, summary, commit sha, error. Circuit breaker reads the last 3. |
 | `agent_sessions` | Session IDs per (repo, pr_number, agent). Used to `--resume` claude sessions across feedback events on the same PR. |
 | `pr_skip` | User-maintained skip list (`aupr skip`/`unskip`) and circuit-breaker entries. |
+| `recovery_stashes` | Dedup table for orphaned `aupr: auto-stash` stashes; drives `aupr recovery` and first-sight notifications. |
+| `daemon_settings` | Key/value: `pause_reason`, `last_digest_at`, future scheduler state. |
 
 Useful queries while iterating:
 
@@ -123,6 +187,8 @@ aupr [--dry-run] [--verbose] [--config PATH] <command>
   skip <repo> <pr> [reason]   add to persistent skip list
   unskip <repo> <pr>          remove from skip list
   logs [-f] [-n N] [--err]    tail launchd log files
+  digest [--since DUR]        print a summary (default: last 24h)
+  recovery                    list aupr-authored stashes left behind
   config show|path|init|edit
 ```
 

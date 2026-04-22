@@ -17,6 +17,7 @@ import (
 
 	"github.com/ionrock/aupr/internal/config"
 	"github.com/ionrock/aupr/internal/daemon"
+	"github.com/ionrock/aupr/internal/digest"
 	"github.com/ionrock/aupr/internal/logging"
 	"github.com/ionrock/aupr/internal/scheduler"
 	"github.com/ionrock/aupr/internal/state"
@@ -57,6 +58,8 @@ func NewApp() *cli.Command {
 			cmdOnce(),
 			cmdTest(),
 			cmdStatus(),
+			cmdDigest(),
+			cmdRecovery(),
 			cmdSkip(),
 			cmdUnskip(),
 			cmdConfig(),
@@ -350,6 +353,64 @@ func cmdUnskip() *cli.Command {
 				return err
 			}
 			fmt.Fprintf(c.Writer, "unskipped %s#%d\n", repo, n)
+			return nil
+		},
+	}
+}
+
+func cmdDigest() *cli.Command {
+	return &cli.Command{
+		Name:  "digest",
+		Usage: "print a summary of recent activity (last 24h by default)",
+		Flags: []cli.Flag{
+			&cli.DurationFlag{Name: "since", Value: 24 * time.Hour, Usage: "time window"},
+		},
+		Action: func(ctx context.Context, c *cli.Command) error {
+			_, st, closeState, err := loadConfigAndState(c)
+			if err != nil {
+				return err
+			}
+			defer closeState()
+			now := time.Now()
+			since := now.Add(-c.Duration("since"))
+			attempts, _ := st.AttemptsSince(ctx, since)
+			skips, _ := st.ListSkipped(ctx)
+			stashes, _ := st.ListRecoveryStashes(ctx)
+			summary := digest.Build(since, now, attempts, skips, stashes)
+			fmt.Fprint(c.Writer, summary.Format())
+			return nil
+		},
+	}
+}
+
+func cmdRecovery() *cli.Command {
+	return &cli.Command{
+		Name:  "recovery",
+		Usage: "list aupr-authored stashes left behind by an interrupted protocol",
+		Action: func(ctx context.Context, c *cli.Command) error {
+			_, st, closeState, err := loadConfigAndState(c)
+			if err != nil {
+				return err
+			}
+			defer closeState()
+			stashes, err := st.ListRecoveryStashes(ctx)
+			if err != nil {
+				return err
+			}
+			out := c.Writer
+			if len(stashes) == 0 {
+				fmt.Fprintln(out, "No recovery stashes tracked.")
+				return nil
+			}
+			fmt.Fprintf(out, "%d recovery stash(es) — run `git stash pop <ref>` in each to recover:\n\n", len(stashes))
+			tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(tw, "  REPO PATH\tREF\tFIRST SEEN\tMESSAGE")
+			for _, s := range stashes {
+				fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n",
+					s.RepoPath, s.Ref, s.FirstSeenAt.Format("2006-01-02 15:04"),
+					truncateStr(s.Message, 60))
+			}
+			tw.Flush()
 			return nil
 		},
 	}

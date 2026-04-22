@@ -85,10 +85,13 @@ type AgentConfig struct {
 //	{prompt}      the rendered prompt (only when prompt_delivery="arg")
 //	{prompt_file} temp-file path (only when prompt_delivery="file")
 type AgentCommandConfig struct {
-	Argv           []string `toml:"argv"`
-	PromptDelivery string   `toml:"prompt_delivery"` // "arg" | "file"
-	SessionIDFrom  string   `toml:"session_id_from"` // "json:field" | "line:prefix" | ""
-	SummaryFrom    string   `toml:"summary_from"`
+	Argv             []string `toml:"argv"`
+	PromptDelivery   string   `toml:"prompt_delivery"` // "arg" | "file"
+	SessionIDFrom    string   `toml:"session_id_from"` // "json:field" | "line:prefix" | ""
+	SummaryFrom      string   `toml:"summary_from"`
+	InputTokensFrom  string   `toml:"input_tokens_from"` // same form; value parsed as int
+	OutputTokensFrom string   `toml:"output_tokens_from"`
+	CostUSDFrom      string   `toml:"cost_usd_from"` // value parsed as float
 }
 
 // PolicyConfig defines what the daemon will and won't act on.

@@ -18,18 +18,21 @@ import (
 	"log/slog"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/ionrock/aupr/internal/agent"
 	"github.com/ionrock/aupr/internal/config"
+	"github.com/ionrock/aupr/internal/digest"
 	"github.com/ionrock/aupr/internal/discovery"
 	"github.com/ionrock/aupr/internal/execx"
 	"github.com/ionrock/aupr/internal/feedback"
 	"github.com/ionrock/aupr/internal/land"
 	"github.com/ionrock/aupr/internal/notify"
 	"github.com/ionrock/aupr/internal/policy"
+	"github.com/ionrock/aupr/internal/recovery"
 	"github.com/ionrock/aupr/internal/state"
 	"github.com/ionrock/aupr/internal/worktree"
 )
@@ -91,6 +94,11 @@ func (s *Scheduler) RunOnce(ctx context.Context, opts Options) error {
 		fmt.Fprintf(opts.Output, "[paused] act-loop suspended (%s); polling continues\n", pauseReason)
 	}
 
+	// Daily digest: run before discovery so errors there don't hide the digest.
+	if err := s.maybeSendDigest(ctx); err != nil {
+		s.logger.Warn("digest send failed", "err", err)
+	}
+
 	// 1. Discovery.
 	w := &discovery.Walker{Runner: s.runner, Logger: s.logger}
 	repos, err := w.Walk(ctx, s.cfg.Daemon.Roots)
@@ -104,6 +112,13 @@ func (s *Scheduler) RunOnce(ctx context.Context, opts Options) error {
 	for _, r := range repos {
 		allowed[r.NWO] = struct{}{}
 		repoByNWO[r.NWO] = r
+	}
+
+	// Recovery scan: look for orphaned aupr stashes from any interrupted
+	// checkout-mode protocol.
+	scanner := &recovery.Scanner{Runner: s.runner, Logger: s.logger, Store: s.state, Notifier: s.notifier}
+	if _, err := scanner.Scan(ctx, repos); err != nil {
+		s.logger.Warn("recovery scan", "err", err)
 	}
 
 	// 2. Enumerate PRs via gh.
@@ -356,6 +371,9 @@ func (s *Scheduler) act(
 	}
 	attempt.Summary = resp.Summary
 	attempt.CommitSHA = lres.CommitSHA
+	attempt.InputTokens = resp.InputTokens
+	attempt.OutputTokens = resp.OutputTokens
+	attempt.CostUSD = resp.CostUSD
 	attempt.FinishedAt = time.Now()
 	_ = s.state.RecordAttempt(ctx, attempt)
 
@@ -364,14 +382,51 @@ func (s *Scheduler) act(
 		_ = s.state.RecordSeen(ctx, pr.Repo, pr.Number, lastEventID)
 	}
 
-	_ = s.notifier.Notify(ctx, notify.Event{
-		Kind: "acted", Repo: pr.Repo, PR: pr.Number, URL: pr.URL,
-		Summary: resp.Summary, Detail: lres.CommitSHA,
-	})
+	// summary_cadence gates success notifications: per_action fires
+	// every time, daily/never suppresses (digest picks them up).
+	if s.cfg.Notify.SummaryCadence == "per_action" || s.cfg.Notify.SummaryCadence == "" {
+		_ = s.notifier.Notify(ctx, notify.Event{
+			Kind: "acted", Repo: pr.Repo, PR: pr.Number, URL: pr.URL,
+			Summary: resp.Summary, Detail: lres.CommitSHA,
+		})
+	}
 	if opts.DryRun {
 		return "dry-run-ok"
 	}
 	return "acted"
+}
+
+// maybeSendDigest fires a digest to the notifier iff cadence="daily"
+// and >= 24h have passed since the last digest (tracked in
+// daemon_settings).
+func (s *Scheduler) maybeSendDigest(ctx context.Context) error {
+	if s.cfg.Notify.SummaryCadence != "daily" {
+		return nil
+	}
+	now := time.Now()
+	lastS, _, _ := s.state.GetSetting(ctx, "last_digest_at")
+	last := int64(0)
+	if lastS != "" {
+		last, _ = strconv.ParseInt(lastS, 10, 64)
+	}
+	if last != 0 && now.Unix()-last < 24*60*60 {
+		return nil
+	}
+	since := now.Add(-24 * time.Hour)
+	attempts, _ := s.state.AttemptsSince(ctx, since)
+	skips, _ := s.state.ListSkipped(ctx)
+	stashes, _ := s.state.ListRecoveryStashes(ctx)
+	summary := digest.Build(since, now, attempts, skips, stashes)
+	if summary.Empty() {
+		_ = s.state.SetSetting(ctx, "last_digest_at", strconv.FormatInt(now.Unix(), 10))
+		return nil
+	}
+	body := summary.Format()
+	s.logger.Info("sending daily digest", "attempts", len(attempts), "errors", summary.ErrorCount)
+	_ = s.notifier.Notify(ctx, notify.Event{
+		Kind: "digest", Summary: "daily digest", Detail: body,
+	})
+	return s.state.SetSetting(ctx, "last_digest_at", strconv.FormatInt(now.Unix(), 10))
 }
 
 func allFailed(attempts []state.Attempt) bool {

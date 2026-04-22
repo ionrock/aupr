@@ -122,10 +122,37 @@ func (c *Command) Invoke(ctx context.Context, req Request) (*Response, error) {
 		sessionID = req.SessionID
 	}
 
+	var inT, outT int64
+	var cost float64
+	if c.Cfg.InputTokensFrom != "" {
+		if v, ok := captureField(out, c.Cfg.InputTokensFrom); ok {
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+				inT = n
+			}
+		}
+	}
+	if c.Cfg.OutputTokensFrom != "" {
+		if v, ok := captureField(out, c.Cfg.OutputTokensFrom); ok {
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+				outT = n
+			}
+		}
+	}
+	if c.Cfg.CostUSDFrom != "" {
+		if v, ok := captureField(out, c.Cfg.CostUSDFrom); ok {
+			if f, err := strconv.ParseFloat(v, 64); err == nil {
+				cost = f
+			}
+		}
+	}
+
 	return &Response{
-		SessionID: sessionID,
-		Summary:   truncate(summary, 160),
-		Output:    out,
+		SessionID:    sessionID,
+		Summary:      truncate(summary, 160),
+		Output:       out,
+		InputTokens:  inT,
+		OutputTokens: outT,
+		CostUSD:      cost,
 	}, nil
 }
 

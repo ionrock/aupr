@@ -34,6 +34,11 @@ type Response struct {
 	FilesTouched []string
 	NewCommit    string // sha of the agent's commit, if any; empty if none
 	Output       string // raw agent stdout (for audit; may be large)
+
+	// Cost tracking (0 if not reported by the backend).
+	InputTokens  int64
+	OutputTokens int64
+	CostUSD      float64
 }
 
 // Agent is the contract for a coding-agent backend.

@@ -89,7 +89,7 @@ func (f *fakeRunner) RunIn(_ context.Context, dir, name string, args ...string) 
 
 func TestClaudeInvokeHappyPath(t *testing.T) {
 	fr := &fakeRunner{
-		stdout: `{"session_id":"sess-123","result":"SUMMARY: fixed typo","is_error":false}`,
+		stdout: `{"session_id":"sess-123","result":"SUMMARY: fixed typo","is_error":false,"total_cost_usd":0.0125,"usage":{"input_tokens":1234,"output_tokens":567}}`,
 	}
 	c := &ClaudeCode{Runner: fr}
 	resp, err := c.Invoke(context.Background(), Request{
@@ -101,6 +101,12 @@ func TestClaudeInvokeHappyPath(t *testing.T) {
 	}
 	if resp.SessionID != "sess-123" || resp.Summary != "fixed typo" {
 		t.Errorf("bad response: %+v", resp)
+	}
+	if resp.InputTokens != 1234 || resp.OutputTokens != 567 {
+		t.Errorf("tokens: in %d out %d", resp.InputTokens, resp.OutputTokens)
+	}
+	if resp.CostUSD < 0.012 || resp.CostUSD > 0.013 {
+		t.Errorf("cost: %f", resp.CostUSD)
 	}
 	if fr.last.dir != "/tmp/wk" {
 		t.Errorf("wrong cwd: %q", fr.last.dir)

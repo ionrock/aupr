@@ -77,9 +77,14 @@ func (c *ClaudeCode) Invoke(ctx context.Context, req Request) (*Response, error)
 // Field names here follow the current Anthropic CLI schema; unknown fields
 // are ignored so schema evolution doesn't break us.
 type claudeOutput struct {
-	SessionID string `json:"session_id"`
-	Result    string `json:"result"`
-	IsError   bool   `json:"is_error"`
+	SessionID    string  `json:"session_id"`
+	Result       string  `json:"result"`
+	IsError      bool    `json:"is_error"`
+	TotalCostUSD float64 `json:"total_cost_usd"` // newer claude versions include cost
+	Usage        struct {
+		InputTokens  int64 `json:"input_tokens"`
+		OutputTokens int64 `json:"output_tokens"`
+	} `json:"usage"`
 	// Some claude versions emit NDJSON instead; we handle that below.
 }
 
@@ -96,9 +101,12 @@ func (c *ClaudeCode) parseOutput(out string, req Request) (*Response, error) {
 			return nil, fmt.Errorf("claude reported is_error: %s", o.Result)
 		}
 		return &Response{
-			SessionID: o.SessionID,
-			Summary:   extractSummary(o.Result),
-			Output:    trimmed,
+			SessionID:    o.SessionID,
+			Summary:      extractSummary(o.Result),
+			Output:       trimmed,
+			InputTokens:  o.Usage.InputTokens,
+			OutputTokens: o.Usage.OutputTokens,
+			CostUSD:      o.TotalCostUSD,
 		}, nil
 	}
 
@@ -116,9 +124,12 @@ func (c *ClaudeCode) parseOutput(out string, req Request) (*Response, error) {
 				return nil, fmt.Errorf("claude reported is_error: %s", o2.Result)
 			}
 			return &Response{
-				SessionID: o2.SessionID,
-				Summary:   extractSummary(o2.Result),
-				Output:    trimmed,
+				SessionID:    o2.SessionID,
+				Summary:      extractSummary(o2.Result),
+				Output:       trimmed,
+				InputTokens:  o2.Usage.InputTokens,
+				OutputTokens: o2.Usage.OutputTokens,
+				CostUSD:      o2.TotalCostUSD,
 			}, nil
 		}
 	}

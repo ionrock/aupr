@@ -118,4 +118,5 @@ There is no release automation yet. When we need one:
 | M2 | ✅ shipped | `internal/worktree/` with plan/acquire/release, stash-protected checkout, pluggable create_command, scheduler shows WORKSPACE column |
 | M3 | ✅ shipped | `internal/agent/` (claude-code + pluggable `command`), `internal/land/`, `internal/daemon/`, sqlite state, circuit breaker, launchd script |
 | M4 | ✅ shipped | status (summary + detail), pause/resume runtime control, skip/unskip, per-repo agent/agent_command/quality-gates overrides, session reuse, Slack + macOS notifiers, logs subcommand |
-| M5+ | planned | crash-recovery stash scan, codex + opencode agents, cost tracking, per-PR cadence, daily digest scheduling |
+| M5 | ✅ shipped | crash-recovery stash scan + `aupr recovery`, cost tracking (tokens + USD) persisted per attempt + digest totals, daily digest scheduling with `summary_cadence` honored, `aupr digest` subcommand |
+| M6+ | planned | codex + opencode built-in agent backends, per-PR cadence overrides, repo-pool worktree policy, web UI |

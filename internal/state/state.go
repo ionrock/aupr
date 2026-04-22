@@ -22,6 +22,7 @@ type Store interface {
 	RecordAttempt(ctx context.Context, a Attempt) error
 	RecentAttempts(ctx context.Context, repo string, prNumber int, limit int) ([]Attempt, error)
 	AllRecentAttempts(ctx context.Context, limit int) ([]Attempt, error)
+	AttemptsSince(ctx context.Context, since time.Time) ([]Attempt, error)
 
 	// Agent sessions (for resume)
 	SaveSession(ctx context.Context, s Session) error
@@ -38,21 +39,34 @@ type Store interface {
 	Pause(ctx context.Context, reason string) error
 	Unpause(ctx context.Context) error
 
+	// Recovery-stash dedup: returns true when the stash was seen for
+	// the first time (caller should notify).
+	SeenRecoveryStash(ctx context.Context, repoPath, ref, message string) (first bool, err error)
+	ForgetRecoveryStashes(ctx context.Context, repoPath string, keepRefs []string) error
+	ListRecoveryStashes(ctx context.Context) ([]RecoveryStash, error)
+
+	// Generic settings (timestamps, scheduler bookkeeping).
+	GetSetting(ctx context.Context, key string) (string, bool, error)
+	SetSetting(ctx context.Context, key, value string) error
+
 	Close() error
 }
 
 // Attempt records one act-on-feedback invocation.
 type Attempt struct {
-	Repo       string
-	PRNumber   int
-	EventID    string
-	StartedAt  time.Time
-	FinishedAt time.Time
-	Agent      string
-	Outcome    string // "success" | "error" | "dry-run" | "declined" | "skipped"
-	Summary    string
-	CommitSHA  string
-	Error      string
+	Repo         string
+	PRNumber     int
+	EventID      string
+	StartedAt    time.Time
+	FinishedAt   time.Time
+	Agent        string
+	Outcome      string // "success" | "error" | "dry-run" | "declined" | "skipped"
+	Summary      string
+	CommitSHA    string
+	Error        string
+	InputTokens  int64 // 0 if not reported by the agent
+	OutputTokens int64
+	CostUSD      float64 // 0 if not reported
 }
 
 // Session is an agent session ID we can resume.
@@ -78,4 +92,13 @@ type Cursor struct {
 	PRNumber    int
 	LastEventID string
 	UpdatedAt   time.Time
+}
+
+// RecoveryStash is an aupr-marked git stash found during startup scan.
+type RecoveryStash struct {
+	RepoPath    string
+	Ref         string // e.g. "stash@{0}"
+	Message     string
+	FirstSeenAt time.Time
+	NotifiedAt  time.Time
 }
