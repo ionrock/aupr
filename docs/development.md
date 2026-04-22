@@ -6,7 +6,7 @@
 - `gh` CLI authenticated as the operator whose PRs you want to monitor
   (check with `gh auth status`)
 - SSH-based git remotes on GitHub (aupr never prompts for HTTPS creds)
-- For M2+: `wt`, `claude` / `codex` / `opencode`, `bd`
+- For M2+: `wt`, `claude` / `codex` / `opencode`
 
 ## Layout
 

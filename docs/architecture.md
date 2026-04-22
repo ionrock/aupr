@@ -102,7 +102,6 @@ new code so we don't back ourselves into a corner.
 | `git` | Worktree state checks, rebase, push (M2+) | SSH remotes |
 | `wt` | Worktree acquisition (M2+) | `wt list --format=json` available |
 | `claude` / `codex` / `opencode` | Agent invocation (M2+) | Authed; session IDs persisted |
-| `bd` | `bd sync` during "landing the plane" (M3) | Per-repo `.bd/` |
 
 All of these are invoked through `execx.Runner`, never with `os/exec`
 directly, so every test can substitute a fake.

@@ -52,11 +52,9 @@ Observed from `~/Projects/workset/` and tooling in place:
 - **`workset.el`** is the Emacs wrapper. Branches are prefixed `eric/`, worktrees
   live under `~/.workset/` by default, and vterm sessions are named
   `*workset: %r/%t<%n>*`.
-- **`bd` (beads)** tracks issues per-project. Per `workset/AGENTS.md`:
-  `bd ready`, `bd show`, `bd update --status in_progress`, `bd close`, `bd sync`.
 - **"Landing the plane"** is a mandatory session-close ritual:
-  `git pull --rebase && bd sync && git push`. Work is NOT complete until
-  push succeeds. Daemon must follow this.
+  `git pull --rebase && git push`. Work is NOT complete until push
+  succeeds. Daemon must follow this.
 - **Coding agents already installed:** Claude Code, Codex, OpenCode. Eric has
   Hermes skills for each. `claude` auth was recently refreshed (OAuth),
   `codex` is authed.
@@ -183,10 +181,9 @@ reason. Every decision is logged with its reason so Eric can tune heuristics.
 After a successful agent pass:
 1. Run repo's quality gates (detect from `justfile` / `Makefile` / `package.json`)
 2. `git pull --rebase` on the PR branch
-3. `bd sync` if the repo has a `.bd/` dir
-4. `git push`
-5. Verify `git status` shows up-to-date-with-origin
-6. Reply to originating comment thread with a link to the new commit and a
+3. `git push`
+4. Verify `git status` shows up-to-date-with-origin
+5. Reply to originating comment thread with a link to the new commit and a
    short summary
 
 If any step fails, daemon stops, leaves the worktree dirty, and notifies Eric.
@@ -326,18 +323,15 @@ aupr test <pr> --dry-run # preview what the daemon would do
    Claude Code default, Codex for repos where we've seen OAuth issues.
 4. **Slack digest or self-DM per action?** I'd default to daily digest + DM
    on flags, not per-action.
-5. **Should the daemon file `bd` issues for flagged-but-not-addressed
-   feedback?** Fits the workset workflow — you'd see them in `bd ready`.
-   Slight complexity bump.
-6. **Should `autotriage` be extended instead of a new project?** Haven't read
+5. **Should `autotriage` be extended instead of a new project?** Haven't read
    it yet; if it already does discovery + queue, worth layering on.
-7. **Review-comment reply wording?** Do you want a fixed template, or should
+6. **Review-comment reply wording?** Do you want a fixed template, or should
    the agent draft per-comment? I lean fixed template ("addressed in <sha>:
    <one-line summary>") for auditability.
-8. **What's the bar for "safe to auto-act"?** My proposal in §4.6 is
+7. **What's the bar for "safe to auto-act"?** My proposal in §4.6 is
    conservative. Easy to loosen later; hard to claw back trust if we start
    too aggressive.
-9. **Does anything here conflict with how `workset.el` expects to own
+8. **Does anything here conflict with how `workset.el` expects to own
    worktrees?** If workset is the source of truth, aupr should be a client
    that asks workset for worktrees (e.g. via a small emacsclient call or a
    shared registry file).
@@ -352,5 +346,5 @@ aupr test <pr> --dry-run # preview what the daemon would do
 
 ---
 
-**Review ask:** tell me what to change. In particular questions 1-9 in §10.
+**Review ask:** tell me what to change. In particular questions 1-8 in §10.
 Once aligned I'll implement M1 end-to-end for you to kick the tires on.

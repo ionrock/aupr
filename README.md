@@ -10,7 +10,7 @@ roadmap and [docs/](./docs/) for reference.
 
 - Authored PRs only (`--author @me`)
 - Repos under `~/Dagster/` and `~/Projects/` (configurable)
-- Respects `wt` + `workset` + `bd` workflows
+- Respects `wt` + `workset` workflows
 - Never merges, never force-pushes, never touches a dirty worktree
 
 ## Quick start
