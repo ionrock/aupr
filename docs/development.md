@@ -6,7 +6,8 @@
 - `gh` CLI authenticated as the operator whose PRs you want to monitor
   (check with `gh auth status`)
 - SSH-based git remotes on GitHub (aupr never prompts for HTTPS creds)
-- For M3+: `claude` / `codex` / `opencode` (agent invocation)
+- `claude` CLI authed and on PATH (only agent backend wired in M3;
+  codex/opencode stubs are in place and return ErrNotImplemented)
 - Optional: `wt`, `superset.sh`, or any worktree-producing tool you want
   to configure as `[worktree] create_command`
 

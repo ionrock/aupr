@@ -33,9 +33,26 @@ internal/feedback/             Shells out to `gh` to list authored open PRs
 internal/policy/               The classifier. Decides AUTO / FLAG / SKIP
                                per event and rolls up per PR. See
                                docs/policy.md.
-internal/state/                Cursor store: last acted-on event ID per PR.
-                               M1 has an in-memory implementation; M3 swaps
-                               in sqlite behind the same Store interface.
+internal/state/                Persistence. Store interface with Memory
+                               (tests) and SQLite (production, via
+                               modernc.org/sqlite) backends. Tables:
+                               pr_cursor, attempts, agent_sessions,
+                               pr_skip.
+internal/agent/                Pluggable agent backend. Registry.Get()
+                               resolves a name (claude-code | codex |
+                               opencode) to an Agent. Today only
+                               claude-code is wired (invokes
+                               `claude -p --output-format=json`); the
+                               others return ErrNotImplemented.
+internal/land/                 "Landing the plane": quality gates (auto-
+                               detected from justfile/Makefile/go.mod/
+                               pyproject.toml/package.json), pull-rebase,
+                               push, optional gh PR comment reply.
+internal/daemon/               Ticker loop wrapping scheduler.RunOnce.
+                               Honors context cancellation on SIGTERM/
+                               SIGINT; per-tick 30-min deadline.
+internal/notify/               User-facing notifications. Log sink
+                               ships; Slack/macOS to be added.
 internal/worktree/             Plans and acquires a workspace for a PR.
                                Prefers existing worktrees (git worktree
                                list --porcelain); otherwise follows the

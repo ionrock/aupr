@@ -41,14 +41,13 @@ Keep it on while developing or calibrating.
 ```
 aupr [--dry-run] [--verbose] [--config PATH] <command>
 
-  run         start the daemon in the foreground            (M3)
-  once        one tick of discovery + decision              (M1 ✅)
-  status      show daemon / PR status                       (M3)
-  pause       stop acting (keep polling)                    (M3)
-  resume      resume acting                                 (M3)
-  skip   <pr> never act on this PR                          (M3)
-  unskip <pr> remove from skip list                         (M3)
-  config      show | path | init | edit                     (M1 ✅)
-  logs        print / tail the daemon log                   (M3)
-  test   <pr> preview action for a single PR                (M2)
+  run                         ticker loop (daemon-friendly)        ✅
+  once                        one tick + decision table             ✅
+  test <repo> <pr>            preview or act on a single PR         ✅
+  status                      skip list + recent activity           ✅
+  skip   <repo> <pr> [reason] persistently skip                     ✅
+  unskip <repo> <pr>          remove from skip list                 ✅
+  config show|path|init|edit                                        ✅
+  pause | resume              runtime control                       M5+
+  logs                        print / tail daemon log               M5+
 ```

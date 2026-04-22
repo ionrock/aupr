@@ -1,7 +1,13 @@
 // Package scheduler orchestrates one tick of the aupr loop.
 //
-// M1 responsibility: walk roots → enumerate authored open PRs → fetch events →
-// classify → print a decision table. No mutations.
+// The tick:
+//  1. Walk roots to find repos.
+//  2. Enumerate open authored PRs via gh.
+//  3. For each PR: enrich, fetch feedback, classify.
+//  4. For non-skip PRs: plan workspace.
+//  5. For AUTO PRs: act (acquire workspace → invoke agent → land) —
+//     gated behind --dry-run (which stops before any mutation).
+//  6. Render the decision table.
 package scheduler
 
 import (
@@ -14,11 +20,15 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
+	"github.com/ionrock/aupr/internal/agent"
 	"github.com/ionrock/aupr/internal/config"
 	"github.com/ionrock/aupr/internal/discovery"
 	"github.com/ionrock/aupr/internal/execx"
 	"github.com/ionrock/aupr/internal/feedback"
+	"github.com/ionrock/aupr/internal/land"
+	"github.com/ionrock/aupr/internal/notify"
 	"github.com/ionrock/aupr/internal/policy"
 	"github.com/ionrock/aupr/internal/state"
 	"github.com/ionrock/aupr/internal/worktree"
@@ -28,33 +38,46 @@ import (
 type Options struct {
 	DryRun bool
 	Output io.Writer // defaults to os.Stdout
+
+	// OnlyPR, if non-zero, restricts this tick to a single PR. Used by
+	// `aupr test <pr>`.
+	OnlyRepo string
+	OnlyPR   int
+
+	// Interactive makes worktree-mode=checkout use stdin prompting. For
+	// `aupr run` (daemon) this is false and checkout-mode is declined.
+	Interactive bool
 }
 
 // Scheduler is the top-level coordinator.
 type Scheduler struct {
-	cfg    *config.Config
-	logger *slog.Logger
-	runner execx.Runner
-	state  state.Store
+	cfg      *config.Config
+	logger   *slog.Logger
+	runner   execx.Runner
+	state    state.Store
+	notifier notify.Notifier
+	agents   *agent.Registry
 }
 
-// New returns a Scheduler ready to RunOnce.
-func New(cfg *config.Config, logger *slog.Logger) *Scheduler {
+// New returns a Scheduler ready to RunOnce. The caller owns state.Close().
+func New(cfg *config.Config, logger *slog.Logger, st state.Store) *Scheduler {
 	runner := &execx.OS{Logger: logger}
 	return &Scheduler{
-		cfg:    cfg,
-		logger: logger,
-		runner: runner,
-		state:  state.NewMemory(),
+		cfg:      cfg,
+		logger:   logger,
+		runner:   runner,
+		state:    st,
+		notifier: &notify.Log{Logger: logger},
+		agents:   &agent.Registry{Runner: runner, Logger: logger},
 	}
 }
 
-// RunOnce performs a single discovery+decision cycle and prints the table.
+// RunOnce performs a single discovery+decision+act cycle.
 func (s *Scheduler) RunOnce(ctx context.Context, opts Options) error {
 	if opts.Output == nil {
 		opts.Output = os.Stdout
 	}
-	s.logger.Info("aupr tick: starting", "dry_run", opts.DryRun)
+	s.logger.Info("aupr tick: starting", "dry_run", opts.DryRun, "only_pr", opts.OnlyPR)
 	if opts.DryRun {
 		fmt.Fprintln(opts.Output, "[dry-run] no mutations will be performed")
 	}
@@ -82,13 +105,33 @@ func (s *Scheduler) RunOnce(ctx context.Context, opts Options) error {
 	}
 	s.logger.Info("found open authored PRs", "count", len(prs))
 
-	// 3. Enrich + classify.
+	// Filter for OnlyPR.
+	if opts.OnlyPR > 0 {
+		filtered := prs[:0]
+		for _, pr := range prs {
+			if pr.Number == opts.OnlyPR && (opts.OnlyRepo == "" || pr.Repo == opts.OnlyRepo) {
+				filtered = append(filtered, pr)
+			}
+		}
+		prs = filtered
+		if len(prs) == 0 {
+			return fmt.Errorf("no matching PR for repo=%q number=%d", opts.OnlyRepo, opts.OnlyPR)
+		}
+	}
+
+	// 3. Enrich + classify + plan + (maybe) act.
 	engine := &policy.Engine{Cfg: s.cfg, User: s.cfg.Daemon.GithubUser}
-	wtMgr := &worktree.Manager{Cfg: &s.cfg.Worktree, Runner: s.runner, Logger: s.logger, Prompt: worktree.DenyPrompter{}}
+	var prompter worktree.Prompter = worktree.DenyPrompter{}
+	if opts.Interactive {
+		prompter = worktree.StdinPrompter{}
+	}
+	wtMgr := &worktree.Manager{Cfg: &s.cfg.Worktree, Runner: s.runner, Logger: s.logger, Prompt: prompter}
+
 	type row struct {
-		decision policy.Decision
-		plan     *worktree.Plan // nil when we don't bother planning (SKIP) or planning errored
-		planErr  error
+		decision   policy.Decision
+		plan       *worktree.Plan
+		planErr    error
+		actOutcome string // filled when action was attempted
 	}
 	var rows []row
 	for i := range prs {
@@ -96,6 +139,15 @@ func (s *Scheduler) RunOnce(ctx context.Context, opts Options) error {
 			return err
 		}
 		pr := &prs[i]
+
+		// Config-level skip list and persistent skip list.
+		if skipped, reason, _ := s.state.IsSkipped(ctx, pr.Repo, pr.Number); skipped {
+			rows = append(rows, row{decision: policy.Decision{
+				PR: *pr, Action: policy.ActSkip, Reason: "persistent skip: " + reason,
+			}})
+			continue
+		}
+
 		if err := client.EnrichPR(ctx, pr); err != nil {
 			s.logger.Warn("enrich pr failed", "repo", pr.Repo, "pr", pr.Number, "err", err)
 			continue
@@ -106,12 +158,10 @@ func (s *Scheduler) RunOnce(ctx context.Context, opts Options) error {
 			continue
 		}
 		sort.Slice(events, func(i, j int) bool { return events[i].CreatedAt.Before(events[j].CreatedAt) })
-		cursor, _ := s.state.LastSeen(pr.Repo, pr.Number)
+		cursor, _ := s.state.LastSeen(ctx, pr.Repo, pr.Number)
 		d := engine.Classify(*pr, events, cursor)
 
 		r := row{decision: d}
-		// Plan a workspace for any PR that might be acted on. Skipped PRs
-		// don't need a plan; it would waste a git worktree list call.
 		if d.Action != policy.ActSkip {
 			repo, ok := repoByNWO[pr.Repo]
 			if !ok {
@@ -128,6 +178,17 @@ func (s *Scheduler) RunOnce(ctx context.Context, opts Options) error {
 				}
 			}
 		}
+
+		// Action: only AUTO, only when we have a viable plan, and only
+		// when the user asked us to (via explicit opts.OnlyPR OR a
+		// daemon run). The one-shot interactive path is `aupr test`,
+		// which sets OnlyPR and uses dry-run by default; `aupr run` sets
+		// !DryRun to actually push.
+		if d.Action == policy.ActAuto && r.plan != nil && r.planErr == nil {
+			outcome := s.act(ctx, repoByNWO[pr.Repo], *pr, d, r.plan, wtMgr, opts)
+			r.actOutcome = outcome
+		}
+
 		rows = append(rows, r)
 	}
 
@@ -135,31 +196,204 @@ func (s *Scheduler) RunOnce(ctx context.Context, opts Options) error {
 	decisions := make([]policy.Decision, len(rows))
 	plans := make([]*worktree.Plan, len(rows))
 	planErrs := make([]error, len(rows))
+	outcomes := make([]string, len(rows))
 	for i, r := range rows {
 		decisions[i] = r.decision
 		plans[i] = r.plan
 		planErrs[i] = r.planErr
+		outcomes[i] = r.actOutcome
 	}
-	renderTable(opts.Output, decisions, plans, planErrs)
+	renderTable(opts.Output, decisions, plans, planErrs, outcomes)
 	s.logger.Info("aupr tick: done", "decisions", len(decisions))
 	return nil
 }
 
-func renderTable(w io.Writer, decisions []policy.Decision, plans []*worktree.Plan, planErrs []error) {
+// act runs the full acquire→invoke→land pipeline for one PR.
+// Returns a short string describing the outcome for the table.
+func (s *Scheduler) act(
+	ctx context.Context,
+	repo discovery.Repo,
+	pr feedback.PR,
+	d policy.Decision,
+	plan *worktree.Plan,
+	wtMgr *worktree.Manager,
+	opts Options,
+) string {
+	// Circuit breaker: if the last 3 attempts on this PR all failed, skip.
+	recent, _ := s.state.RecentAttempts(ctx, pr.Repo, pr.Number, 3)
+	if len(recent) >= 3 && allFailed(recent) {
+		s.logger.Warn("circuit breaker: 3 consecutive failures, auto-skipping",
+			"repo", pr.Repo, "pr", pr.Number)
+		_ = s.state.Skip(ctx, pr.Repo, pr.Number, "circuit breaker: 3 consecutive failures")
+		_ = s.notifier.Notify(ctx, notify.Event{
+			Kind: "circuit-breaker", Repo: pr.Repo, PR: pr.Number, URL: pr.URL,
+			Summary: "auto-skipped after 3 consecutive failures",
+		})
+		return "circuit-break"
+	}
+
+	// Pick agent.
+	agentName := s.cfg.Agent.Default
+	if ov, ok := s.cfg.Repos[pr.Repo]; ok && ov.Agent != "" {
+		agentName = ov.Agent
+	}
+	ag, err := s.agents.Get(agentName)
+	if err != nil {
+		s.logger.Error("agent registry", "err", err)
+		return "agent-err"
+	}
+
+	lastEventID := d.NewEvents[len(d.NewEvents)-1].ID
+	started := time.Now()
+	attempt := state.Attempt{
+		Repo: pr.Repo, PRNumber: pr.Number, EventID: lastEventID,
+		StartedAt: started, Agent: agentName,
+	}
+
+	// Acquire workspace.
+	lease, err := wtMgr.Acquire(ctx, plan)
+	if err != nil {
+		attempt.Outcome, attempt.Error = "error", "acquire: "+err.Error()
+		attempt.FinishedAt = time.Now()
+		_ = s.state.RecordAttempt(ctx, attempt)
+		if errors.Is(err, worktree.ErrSkip) || errors.Is(err, worktree.ErrUserDeclined) {
+			return "wt-" + shortErr(err)
+		}
+		s.logger.Warn("acquire failed", "repo", pr.Repo, "pr", pr.Number, "err", err)
+		return "wt-err"
+	}
+	defer func() {
+		if rerr := lease.Release(ctx); rerr != nil {
+			s.logger.Error("lease release failed", "err", rerr)
+		}
+	}()
+
+	// Load any persisted session for this PR+agent.
+	var sessionID string
+	if sess, ok, _ := s.state.LoadSession(ctx, pr.Repo, pr.Number, agentName); ok {
+		sessionID = sess.SessionID
+	}
+
+	// Build AUTO-only classifications. An agent shouldn't see FLAG events.
+	var auto []policy.EventClass
+	for _, c := range d.Classifications {
+		if c.Action == policy.ActAuto {
+			auto = append(auto, c)
+		}
+	}
+	if len(auto) == 0 {
+		attempt.Outcome = "skipped"
+		attempt.Summary = "no AUTO events in classification"
+		attempt.FinishedAt = time.Now()
+		_ = s.state.RecordAttempt(ctx, attempt)
+		return "no-auto"
+	}
+
+	req := agent.Request{
+		Workspace: lease.Path, PR: pr, Classifications: auto,
+		SessionID: sessionID, MaxTurns: s.cfg.Agent.MaxTurnsPerFeedback,
+		DryRun: opts.DryRun,
+	}
+	resp, err := ag.Invoke(ctx, req)
+	if err != nil {
+		attempt.Outcome, attempt.Error = "error", "agent: "+err.Error()
+		attempt.FinishedAt = time.Now()
+		_ = s.state.RecordAttempt(ctx, attempt)
+		s.logger.Warn("agent invoke failed", "repo", pr.Repo, "pr", pr.Number, "err", err)
+		return "agent-err"
+	}
+	if resp.SessionID != "" {
+		_ = s.state.SaveSession(ctx, state.Session{
+			Repo: pr.Repo, PRNumber: pr.Number, Agent: agentName,
+			SessionID: resp.SessionID, LastUsedAt: time.Now(),
+		})
+	}
+
+	// Land.
+	gates := []string(nil)
+	if ov, ok := s.cfg.Repos[pr.Repo]; ok {
+		gates = ov.QualityGates
+	}
+	lander := &land.Lander{Runner: s.runner, Logger: s.logger}
+	lres, lerr := lander.Land(ctx, lease.Path, pr, land.Options{
+		QualityGates: gates,
+		DryRun:       opts.DryRun,
+		CommentOnPR:  !opts.DryRun,
+	}, resp.Summary)
+	if lerr != nil {
+		attempt.Outcome, attempt.Error = "error", "land: "+lerr.Error()
+		attempt.FinishedAt = time.Now()
+		_ = s.state.RecordAttempt(ctx, attempt)
+		s.logger.Warn("land failed", "repo", pr.Repo, "pr", pr.Number, "err", lerr)
+		return "land-err"
+	}
+
+	attempt.Outcome = "success"
+	if opts.DryRun {
+		attempt.Outcome = "dry-run"
+	}
+	attempt.Summary = resp.Summary
+	attempt.CommitSHA = lres.CommitSHA
+	attempt.FinishedAt = time.Now()
+	_ = s.state.RecordAttempt(ctx, attempt)
+
+	// Only advance the cursor on real (non-dry-run) success.
+	if !opts.DryRun {
+		_ = s.state.RecordSeen(ctx, pr.Repo, pr.Number, lastEventID)
+	}
+
+	_ = s.notifier.Notify(ctx, notify.Event{
+		Kind: "acted", Repo: pr.Repo, PR: pr.Number, URL: pr.URL,
+		Summary: resp.Summary, Detail: lres.CommitSHA,
+	})
+	if opts.DryRun {
+		return "dry-run-ok"
+	}
+	return "acted"
+}
+
+func allFailed(attempts []state.Attempt) bool {
+	for _, a := range attempts {
+		if a.Outcome == "success" {
+			return false
+		}
+	}
+	return true
+}
+
+func shortErr(err error) string {
+	s := err.Error()
+	if i := strings.Index(s, ":"); i > 0 {
+		return s[:i]
+	}
+	if len(s) > 20 {
+		return s[:20]
+	}
+	return s
+}
+
+// --- rendering ---------------------------------------------------------------
+
+func renderTable(
+	w io.Writer,
+	decisions []policy.Decision,
+	plans []*worktree.Plan,
+	planErrs []error,
+	outcomes []string,
+) {
 	if len(decisions) == 0 {
 		fmt.Fprintln(w, "no authored open PRs found")
 		return
 	}
-	// Stable sort: SKIP at the bottom, AUTO on top, then by repo/number.
-	// We sort decisions + parallel plan slices together.
 	type pair struct {
 		d       policy.Decision
 		p       *worktree.Plan
 		planErr error
+		outcome string
 	}
 	pairs := make([]pair, len(decisions))
 	for i := range decisions {
-		pairs[i] = pair{d: decisions[i], p: plans[i], planErr: planErrs[i]}
+		pairs[i] = pair{d: decisions[i], p: plans[i], planErr: planErrs[i], outcome: outcomes[i]}
 	}
 	sort.Slice(pairs, func(i, j int) bool {
 		ri, rj := rankAction(pairs[i].d.Action), rankAction(pairs[j].d.Action)
@@ -173,18 +407,21 @@ func renderTable(w io.Writer, decisions []policy.Decision, plans []*worktree.Pla
 	})
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ACTION\tREPO\tPR\tNEW\tTITLE\tWORKSPACE\tREASON")
+	fmt.Fprintln(tw, "ACTION\tREPO\tPR\tNEW\tTITLE\tWORKSPACE\tOUTCOME\tREASON")
 	for _, p := range pairs {
 		d := p.d
 		title := truncate(d.PR.Title, 50)
-		reason := truncate(d.Reason, 80)
+		reason := truncate(d.Reason, 70)
 		ws := summarizePlan(p.p, p.planErr, d.Action == policy.ActSkip)
-		fmt.Fprintf(tw, "%s\t%s\t#%d\t%d\t%s\t%s\t%s\n",
-			d.Action, d.PR.Repo, d.PR.Number, len(d.NewEvents), title, ws, reason)
+		outcome := p.outcome
+		if outcome == "" {
+			outcome = "—"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t#%d\t%d\t%s\t%s\t%s\t%s\n",
+			d.Action, d.PR.Repo, d.PR.Number, len(d.NewEvents), title, ws, outcome, reason)
 	}
 	_ = tw.Flush()
 
-	// Summary.
 	var auto, flag, skip int
 	for _, d := range decisions {
 		switch d.Action {
@@ -199,7 +436,6 @@ func renderTable(w io.Writer, decisions []policy.Decision, plans []*worktree.Pla
 	fmt.Fprintf(w, "\n%d PR(s): %d AUTO, %d FLAG, %d SKIP\n", len(decisions), auto, flag, skip)
 }
 
-// summarizePlan compresses a worktree.Plan into one column.
 func summarizePlan(p *worktree.Plan, err error, skipped bool) string {
 	if skipped {
 		return "—"
