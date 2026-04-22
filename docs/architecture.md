@@ -1,7 +1,7 @@
 # Architecture
 
 aupr is one Go binary. Everything below lives under
-`github.com/dagster-io/aupr/`.
+`github.com/ionrock/aupr/`.
 
 ## Package map
 

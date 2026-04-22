@@ -7,9 +7,9 @@ func TestParseGitHub(t *testing.T) {
 		url, owner, name string
 		ok               bool
 	}{
-		{"git@github.com:dagster-io/aupr.git", "dagster-io", "aupr", true},
-		{"https://github.com/dagster-io/aupr", "dagster-io", "aupr", true},
-		{"https://github.com/dagster-io/aupr.git", "dagster-io", "aupr", true},
+		{"git@github.com:ionrock/aupr.git", "ionrock", "aupr", true},
+		{"https://github.com/ionrock/aupr", "ionrock", "aupr", true},
+		{"https://github.com/ionrock/aupr.git", "ionrock", "aupr", true},
 		{"ssh://git@github.com/dagster-io/internal.git", "dagster-io", "internal", true},
 		{"git@gitlab.com:x/y.git", "", "", false},
 		{"", "", "", false},

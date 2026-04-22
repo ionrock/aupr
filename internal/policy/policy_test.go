@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dagster-io/aupr/internal/config"
-	"github.com/dagster-io/aupr/internal/feedback"
+	"github.com/ionrock/aupr/internal/config"
+	"github.com/ionrock/aupr/internal/feedback"
 )
 
 func eng() *Engine {

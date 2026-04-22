@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dagster-io/aupr/internal/config"
-	"github.com/dagster-io/aupr/internal/feedback"
+	"github.com/ionrock/aupr/internal/config"
+	"github.com/ionrock/aupr/internal/feedback"
 )
 
 // Action is the high-level decision for a PR.

@@ -10,7 +10,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/dagster-io/aupr/internal/execx"
+	"github.com/ionrock/aupr/internal/execx"
 )
 
 // Repo is a discovered git repository with a resolved GitHub remote.

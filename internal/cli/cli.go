@@ -7,9 +7,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/dagster-io/aupr/internal/config"
-	"github.com/dagster-io/aupr/internal/logging"
-	"github.com/dagster-io/aupr/internal/scheduler"
+	"github.com/ionrock/aupr/internal/config"
+	"github.com/ionrock/aupr/internal/logging"
+	"github.com/ionrock/aupr/internal/scheduler"
 	"github.com/urfave/cli/v3"
 )
 

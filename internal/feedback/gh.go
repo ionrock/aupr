@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dagster-io/aupr/internal/execx"
+	"github.com/ionrock/aupr/internal/execx"
 )
 
 // PR is a normalized open PR authored by the user.

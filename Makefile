@@ -13,7 +13,7 @@
 #
 # Version is stamped into the binary via -ldflags.
 
-PKG          := github.com/dagster-io/aupr
+PKG          := github.com/ionrock/aupr
 CMD          := ./cmd/aupr
 BIN_DIR      := bin
 BIN          := $(BIN_DIR)/aupr

@@ -1,4 +1,4 @@
-module github.com/dagster-io/aupr
+module github.com/ionrock/aupr
 
 go 1.23
 

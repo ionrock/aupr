@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/dagster-io/aupr/internal/cli"
+	"github.com/ionrock/aupr/internal/cli"
 )
 
 func main() {
