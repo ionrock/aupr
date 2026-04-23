@@ -46,7 +46,8 @@ aupr [--dry-run] [--verbose] [--config PATH] <command>
 
   run                         ticker loop (daemon-friendly)        ✅
   once                        one tick + decision table             ✅
-  test <repo> <pr>            preview or act on a single PR         ✅
+  test <repo> <pr>            preview or act on your own PR         ✅
+  inspect <repo> <pr>         run agent on ANY PR; show diff only   ✅
   status                      skip list + recent activity           ✅
   skip   <repo> <pr> [reason] persistently skip                     ✅
   unskip <repo> <pr>          remove from skip list                 ✅

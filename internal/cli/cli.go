@@ -18,6 +18,8 @@ import (
 	"github.com/ionrock/aupr/internal/config"
 	"github.com/ionrock/aupr/internal/daemon"
 	"github.com/ionrock/aupr/internal/digest"
+	"github.com/ionrock/aupr/internal/execx"
+	"github.com/ionrock/aupr/internal/inspect"
 	"github.com/ionrock/aupr/internal/logging"
 	"github.com/ionrock/aupr/internal/scheduler"
 	"github.com/ionrock/aupr/internal/state"
@@ -57,6 +59,7 @@ func NewApp() *cli.Command {
 			cmdRun(),
 			cmdOnce(),
 			cmdTest(),
+			cmdInspect(),
 			cmdStatus(),
 			cmdDigest(),
 			cmdRecovery(),
@@ -167,6 +170,52 @@ func cmdTest() *cli.Command {
 				OnlyRepo:    repo,
 				OnlyPR:      prNum,
 			})
+		},
+	}
+}
+
+func cmdInspect() *cli.Command {
+	return &cli.Command{
+		Name:      "inspect",
+		Usage:     "run the agent on any PR, show the diff, never push",
+		ArgsUsage: "<repo> <pr-number>",
+		Description: "Read-only iteration tool. Fetches the PR head, acquires " +
+			"a workspace, invokes the agent for real, and prints the diff. " +
+			"Works on any PR (not just yours). Never writes state, never " +
+			"pushes, never comments. Leaves the workspace for manual " +
+			"inspection.",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{Name: "reset", Usage: "git reset --hard to PR head before invoking agent"},
+			&cli.BoolFlag{Name: "force-classify", Usage: "suppress the warning when classification is FLAG or SKIP"},
+		},
+		Action: func(ctx context.Context, c *cli.Command) error {
+			if c.Args().Len() != 2 {
+				return fmt.Errorf("inspect requires: <owner/repo> <pr-number>")
+			}
+			repo := c.Args().Get(0)
+			prNum, err := strconv.Atoi(c.Args().Get(1))
+			if err != nil || prNum <= 0 {
+				return fmt.Errorf("invalid PR number: %s", c.Args().Get(1))
+			}
+			ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+			defer stop()
+
+			cfg, err := config.Load(c.String("config"))
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			logger := logging.New(c.Bool("verbose"))
+			runner := &execx.OS{Logger: logger}
+			insp := &inspect.Inspector{Cfg: cfg, Runner: runner, Logger: logger}
+			_, err = insp.Run(ctx, inspect.Options{
+				Repo:          repo,
+				PRNumber:      prNum,
+				Reset:         c.Bool("reset"),
+				ForceClassify: c.Bool("force-classify"),
+				User:          cfg.Daemon.GithubUser,
+				Output:        c.Writer,
+			})
+			return err
 		},
 	}
 }

@@ -178,9 +178,11 @@ aupr [--dry-run] [--verbose] [--config PATH] <command>
 
   run                         ticker loop (daemon-friendly)
   once                        single tick + decision table
-  test <repo> <pr>            one PR through the full pipeline
+  test <repo> <pr>            your own PR through the full pipeline
                               (dry-run by default; pass --dry-run=false
                               to actually push)
+  inspect <repo> <pr>         ANY PR: fetch, run agent, show diff,
+                              never push (iteration tool)
   status [repo pr]            summary, or detail for one PR
   pause [reason...]           suspend the act-loop (polling continues)
   resume                      resume the act-loop
@@ -191,6 +193,57 @@ aupr [--dry-run] [--verbose] [--config PATH] <command>
   recovery                    list aupr-authored stashes left behind
   config show|path|init|edit
 ```
+
+### `inspect` vs `test`
+
+| | `aupr test` | `aupr inspect` |
+|---|---|---|
+| Scope | your own PRs only | any PR you can read via `gh` |
+| Mutations | configurable via `--dry-run` | never; no push, no comment, no state writes |
+| State writes | yes (attempts, cursors, sessions) | no |
+| Circuit breaker | counts | doesn't count |
+| Workspace lifecycle | Release() restores if checkout-mode | left intact for manual inspection |
+| Intended use | pre-production validation | iteration on prompts / backends |
+
+Use `inspect` when you're tuning: the prompt in `internal/agent/prompt.go`,
+the `[agent.command]` argv for a custom backend, or just want to see what
+the agent would produce for a PR you're reviewing.
+
+## The iteration loop
+
+This is how you improve agent quality, one observation at a time.
+
+```bash
+# 1. Pick a PR with meaningful reviewer comments.
+aupr inspect dagster-io/internal 22117
+
+# aupr fetches the PR head into refs/heads/aupr-inspect/.../22117,
+# creates a worktree under ~/.workset/internal/aupr-inspect/..., runs
+# the agent, and prints:
+#   - the classification (why aupr would AUTO/FLAG/SKIP)
+#   - new commits + their diff
+#   - any uncommitted changes
+#   - tokens/cost if the backend reports them
+#   - the workspace path
+
+# 2. Read the diff. Form an opinion: does it address the feedback?
+
+# 3. Adjust. Three common levers:
+#    a) Edit internal/agent/prompt.go to change guidelines/format.
+#    b) Edit internal/policy/policy.go to change which events AUTO.
+#    c) Edit [agent.command] argv to switch backends.
+
+# 4. Re-run on the same PR, wiping the previous attempt:
+aupr inspect --reset dagster-io/internal 22117
+
+# 5. Repeat until you like the output. Then:
+cd ~/.workset/internal/aupr-inspect/...
+git worktree remove .   # clean up
+```
+
+`--force-classify` suppresses the warning if aupr thinks the PR should
+be `FLAG` or `SKIP` — useful when you're intentionally iterating on
+borderline cases to teach the classifier.
 
 ### Pause / resume
 
