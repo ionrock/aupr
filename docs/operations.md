@@ -291,7 +291,7 @@ permissions on first use.
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `gh search prs` times out | Network or gh auth | `gh auth status`; re-run `gh auth refresh` |
-| `agent: unknown backend` | Wrong `[agent] default` | Only `claude-code` is wired in M3. Set `default = "claude-code"`. |
+| `agent: unknown backend` | Wrong `[agent] default` | Only `claude-code` is wired today. Set `default = "claude-code"`. |
 | `no new commits to push` | Agent didn't commit | Check attempt row's `summary`/`output` in state.db; tune prompt |
 | `land: push: Updates were rejected` | Branch diverged during action | aupr leaves the workspace dirty; rebase manually |
 | Circuit-breaker auto-skipped a real PR | 3 unrelated failures in a row | `aupr unskip <repo> <pr>`; investigate the `attempts` rows |

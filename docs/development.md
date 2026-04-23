@@ -6,7 +6,7 @@
 - `gh` CLI authenticated as the operator whose PRs you want to monitor
   (check with `gh auth status`)
 - SSH-based git remotes on GitHub (aupr never prompts for HTTPS creds)
-- `claude` CLI authed and on PATH (only agent backend wired in M3;
+- `claude` CLI authed and on PATH (only built-in agent backend today;
   codex/opencode stubs are in place and return ErrNotImplemented)
 - Optional: `wt`, `superset.sh`, or any worktree-producing tool you want
   to configure as `[worktree] create_command`
@@ -46,7 +46,7 @@ go test ./internal/policy/ -run TestX -v
 make build && ./bin/aupr --dry-run once
 ```
 
-For anything that could mutate state (M2+):
+For anything that could mutate state:
 
 ```
 ./bin/aupr --dry-run <subcommand>   # always first
@@ -107,16 +107,9 @@ There is no release automation yet. When we need one:
 - Tag: `git tag vX.Y.Z && git push --tags`
 - `make build` produces a version-stamped binary
 - `make install` is the local-machine install path today
-- launchd plist + install script will live under `scripts/` (M3)
+- launchd plist + install script live under `scripts/`
 
-## Milestones (from PLAN.md)
+## Roadmap
 
-| Milestone | State | Scope |
-|---|---|---|
-| M0 | ✅ shipped | go mod, cobra→urfave CLI, config, Makefile |
-| M1 | ✅ shipped | discovery, feedback, policy, scheduler, `aupr once` |
-| M2 | ✅ shipped | `internal/worktree/` with plan/acquire/release, stash-protected checkout, pluggable create_command, scheduler shows WORKSPACE column |
-| M3 | ✅ shipped | `internal/agent/` (claude-code + pluggable `command`), `internal/land/`, `internal/daemon/`, sqlite state, circuit breaker, launchd script |
-| M4 | ✅ shipped | status (summary + detail), pause/resume runtime control, skip/unskip, per-repo agent/agent_command/quality-gates overrides, session reuse, Slack + macOS notifiers, logs subcommand |
-| M5 | ✅ shipped | crash-recovery stash scan + `aupr recovery`, cost tracking (tokens + USD) persisted per attempt + digest totals, daily digest scheduling with `summary_cadence` honored, `aupr digest` subcommand |
-| M6+ | planned | codex + opencode built-in agent backends, per-PR cadence overrides, repo-pool worktree policy, web UI |
+On deck: codex + opencode built-in agent backends, per-PR cadence
+overrides, repo-pool worktree policy, web UI.

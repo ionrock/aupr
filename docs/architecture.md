@@ -66,13 +66,13 @@ internal/worktree/             Plans and acquires a workspace for a PR.
                                or skip. See docs/configuration.md.
 internal/scheduler/            One-tick orchestrator. Drives discovery,
                                feedback fetching, classification, and
-                               table rendering. Will host the goroutine
-                               worker pool once M2+ gets real work to do.
+                               table rendering. Hosts the goroutine
+                               worker pool that fans out per-PR work.
 ```
 
 ## One tick, end-to-end
 
-`scheduler.RunOnce` is the whole M1 pipeline:
+`scheduler.RunOnce` is the whole pipeline:
 
 ```
 1. discovery.Walker.Walk(cfg.Daemon.Roots)
@@ -104,14 +104,12 @@ internal/scheduler/            One-tick orchestrator. Drives discovery,
       Log line: "aupr tick: done"
 ```
 
-Dry-run is threaded through as `scheduler.Options{DryRun: bool}` and — once
-agent invocation lands in M3 — will gate every mutating call site. Today,
-`Plan` is the only worktree-package call reachable; `Acquire` only runs
-when the scheduler decides to act on a PR, which requires the agent loop.
+Dry-run is threaded through as `scheduler.Options{DryRun: bool}` and
+gates every mutating call site.
 
-## Process topology (forward-looking)
+## Process topology
 
-M3 turns `scheduler.RunOnce` into the body of a `time.Ticker` loop. The
+`aupr run` wraps `scheduler.RunOnce` in a `time.Ticker` loop. The
 worker-pool fan-out looks like:
 
 ```
@@ -126,17 +124,14 @@ feedback events on the same PR can't be processed concurrently.
 `context.Context` cancellation on SIGTERM lets in-flight workers finish
 their current `git push` before the process exits.
 
-None of that exists yet — it is scaffolding to keep in mind when adding
-new code so we don't back ourselves into a corner.
-
 ## External tools aupr depends on
 
 | Tool | Why | Auth state we assume |
 |---|---|---|
-| `gh` | PR + comment enumeration (M1), comment replies (M3) | Already authed as `ionrock` |
+| `gh` | PR + comment enumeration, comment replies | Already authed as `ionrock` |
 | `git` | `worktree list`, `stash`, `checkout`, `pull --rebase`, `push` | SSH remotes configured |
 | `create_command` (configurable) | Produce a workspace when none exists. Default: `git worktree add`. Can also be `wt`, `superset.sh`, or any team-specific wrapper | argv-callable; prints nothing we need to parse |
-| `claude` / `codex` / `opencode` | Agent invocation (M3+) | Authed; session IDs persisted |
+| `claude` / `codex` / `opencode` | Agent invocation | Authed; session IDs persisted |
 
 All of these are invoked through `execx.Runner`, never with `os/exec`
 directly, so every test can substitute a fake.

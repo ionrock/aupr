@@ -32,9 +32,9 @@ aupr config edit          # create-if-missing then open in $EDITOR
 tick_minutes         = 15                                   # loop period
 roots                = ["~/Dagster", "~/Projects"]          # where to look for git repos
 github_user          = "ionrock"                            # --author filter for gh search
-bounded_concurrency  = 2                                    # worker goroutines (M3+)
+bounded_concurrency  = 2                                    # worker goroutines
 log_path             = "~/.local/state/aupr/aupr.log"
-state_path           = "~/.local/state/aupr/state.db"      # sqlite cursor DB (M3+)
+state_path           = "~/.local/state/aupr/state.db"      # sqlite cursor DB
 
 [worktree]
 mode           = "create"                                        # create | checkout | skip
@@ -70,7 +70,7 @@ slack_enabled        = false
 slack_webhook_url    = ""          # https://hooks.slack.com/services/...
 slack_channel        = ""          # informational only; webhook URL determines routing
 macos_notifications  = false
-summary_cadence      = "daily"     # never | per_action | daily  (reserved for M5+)
+summary_cadence      = "daily"     # never | per_action | daily
 
 # Per-repo overrides, keyed by "owner/name".
 [repos."dagster-io/internal"]

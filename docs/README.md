@@ -2,8 +2,6 @@
 
 Reference material for developers working on aupr itself. User-facing
 installation and CLI usage live in the top-level [README](../README.md).
-The high-level design rationale is in [PLAN.md](../PLAN.md) — these docs
-assume you've skimmed it.
 
 | Document | When to read |
 |---|---|

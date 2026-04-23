@@ -11,11 +11,10 @@ handles the small stuff (nits, typos, review comments), and hands the
 tricky decisions back to you. Think of it less as an autonomous agent
 and more as an attentive nanny for your open pull requests.
 
-**Status:** M1–M5 shipped. End-to-end pipeline behind `--dry-run` with
-pause/resume, Slack + macOS notifiers, pluggable agent backends, crash-
-recovery stash scan, cost tracking, and daily digest. See
-[PLAN.md](./PLAN.md) for roadmap and
-[docs/operations.md](./docs/operations.md) for running the daemon.
+End-to-end pipeline behind `--dry-run` with pause/resume, Slack + macOS
+notifiers, pluggable agent backends, crash-recovery stash scan, cost
+tracking, and daily digest. See [docs/operations.md](./docs/operations.md)
+for running the daemon.
 
 ## Scope
 
@@ -97,7 +96,6 @@ Linux), see [docs/operations.md](docs/operations.md).
 | [docs/configuration.md](docs/configuration.md) | TOML schema, resolution order, adding config fields |
 | [**docs/policy.md**](docs/policy.md) | **How PR-feedback classification works and how to change it** |
 | [docs/development.md](docs/development.md) | Make targets, test conventions, inner loop |
-| [PLAN.md](PLAN.md) | Design rationale, milestones, open questions |
 
 ## Commands
 
